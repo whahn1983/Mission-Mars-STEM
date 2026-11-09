@@ -71,7 +71,7 @@ class EVBLiteAdapter:
         self._last_poll = 0.0
         self._last_ts_ns: int | None = None
         self._last_raw_ts: Any = None
-        self._wrap_offset = 0
+        self._last_unwrapped = 0
         self._prev_raw_int: int | None = None
         self.raw_payloads: list[RawPayloadRecord] = []
         self._raw_bytes = 0
@@ -192,7 +192,7 @@ class EVBLiteAdapter:
         self.raw_truncated = False
         self._last_ts_ns = None
         self._last_raw_ts = None
-        self._wrap_offset = 0
+        self._last_unwrapped = 0
         self._prev_raw_int = None
         self.duplicates_dropped = 0
         if self.profile.start is not None:
@@ -232,9 +232,10 @@ class EVBLiteAdapter:
 
     # ---------------------------------------------------------------- parsing
     def _keep_raw(self, resp: httpx.Response) -> None:
+        # Bounded safety net in case nobody drains (the capture service drains
+        # every batch and applies the per-test size limit).
         if self._raw_bytes + len(resp.content) > MAX_RAW_BYTES_PER_CAPTURE:
-            self.raw_truncated = True
-            return
+            self.raw_payloads, self._raw_bytes = [], 0
         self._raw_bytes += len(resp.content)
         self.raw_payloads.append(RawPayloadRecord(now_ns(), resp.headers.get("content-type", ""), resp.content))
 
@@ -283,13 +284,24 @@ class EVBLiteAdapter:
             return float("nan")
 
     def parse_samples_payload(self, body: bytes, content_type: str = "") -> list[Sample]:
-        spec = self.profile.samples
         try:
-            ts, xs, ys, zs = self._extract_columns(body)
-        except (json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
+            return self._parse_samples_payload(body)
+        except SensorError:
+            raise
+        except (KeyError, IndexError, TypeError, ValueError, OverflowError) as exc:
+            # Includes json.JSONDecodeError. Any malformed payload is a sensor
+            # communication failure, handled with backoff by the manager.
             raise SensorError(f"Could not parse samples payload with the configured profile: {exc}") from exc
+
+    def _parse_samples_payload(self, body: bytes) -> list[Sample]:
+        spec = self.profile.samples
+        ts, xs, ys, zs = self._extract_columns(body)
         if not ts:
             return []
+        if not (len(ts) == len(xs) == len(ys) == len(zs)):
+            raise SensorError(
+                f"Samples payload has columns of different lengths (t={len(ts)}, x={len(xs)}, y={len(ys)}, z={len(zs)})."
+            )
         t_raw = np.array([self._num(v) for v in ts], dtype=np.float64)
         if not np.all(np.isfinite(t_raw)):
             bad = int((~np.isfinite(t_raw)).sum())
@@ -302,14 +314,24 @@ class EVBLiteAdapter:
 
         # Counter wrap-around (e.g. 32-bit microsecond counters).
         if spec.timestamp_wrap_bits:
+            # Unwrap by the signed modular difference from the previous value,
+            # so a re-sent pre-wrap sample maps to the past (and is dropped as
+            # a duplicate) instead of jumping a whole wrap into the future.
             modulus = 1 << int(spec.timestamp_wrap_bits)
             ints = t_raw.astype(np.int64)
             out = np.empty_like(ints)
             for i, v in enumerate(ints):
-                if self._prev_raw_int is not None and v < self._prev_raw_int - modulus // 2:
-                    self._wrap_offset += modulus
-                self._prev_raw_int = int(v)
-                out[i] = v + self._wrap_offset
+                v = int(v) % modulus
+                if self._prev_raw_int is None:
+                    unwrapped = v
+                else:
+                    d = (v - self._prev_raw_int) % modulus
+                    if d >= modulus // 2:
+                        d -= modulus
+                    unwrapped = self._last_unwrapped + d
+                self._prev_raw_int = v
+                self._last_unwrapped = unwrapped
+                out[i] = unwrapped
             t_ns = normalize_timestamps(out, spec.timestamp_unit)
         elif np.all(np.mod(t_raw, 1) == 0) and spec.timestamp_unit in ("ns", "us", "ms"):
             t_ns = normalize_timestamps(t_raw.astype(np.int64), spec.timestamp_unit)

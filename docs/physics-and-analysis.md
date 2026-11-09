@@ -54,9 +54,9 @@ The experiment happens **on Earth**. All physical-test calculations use g = 9.80
 ## 3. Capture workflow
 
 1. **ARM**: the sensor starts streaming.
-2. **Baseline**: 0.4 s (configurable) of stationary data. If the magnitude's standard deviation exceeds 0.08 g, the app waits ("Hold the lander still"). After 8 s it accepts the quietest window and flags `BASELINE_UNSTABLE`.
+2. **Baseline**: 0.4 s (configurable) of stationary data. If the magnitude's standard deviation exceeds 0.08 g, the app waits ("Hold the lander still"). After 8 s it accepts the most recent window and flags `BASELINE_UNSTABLE`. If a free fall or an impact-sized reading happens *during* the baseline (the lander was released too early), the test stops with a clear message and asks the operator to arm again. The drop is never silently discarded.
 3. **Armed**: the app watches for:
-   * **free fall**: |a| < 0.35 g for ≥ 40 ms
+   * **free fall**: |a| < 0.35 g for ≥ 40 ms (every qualifying run counts, so an earlier lift or bump does not hide the real drop)
    * **impact trigger**: |a| rises more than 1.5 g above the baseline **and** either free fall was seen in the last 3 s or |a| ≥ 3.0 g. This keeps ordinary handling bumps from triggering a test.
 4. **Triggered**: recording continues until 1.5 s of **sensor time** after the trigger. A pre-trigger buffer keeps ≥ 0.5 s before the trigger, extended to include the free fall (up to 2 s).
 5. **Analyze & save**: the full analysis below runs, and the test, every raw sample and any raw device responses are saved in **one database transaction**.
@@ -103,7 +103,8 @@ Checks are computed from **sensor timestamps** (never packet arrival times):
 | `REDUCED_SAMPLE_RATE` | warning | observed rate < 800 Hz |
 | `LOW_COMPLETENESS` | error | < 80 % of expected samples |
 | `MISSING_SAMPLES` | warning | < 95 % of expected samples |
-| `GAPS_IN_IMPACT_WINDOW` | error | an interval > 1.8 × the expected interval overlaps the impact ±20 ms |
+| `GAPS_IN_IMPACT_WINDOW` | error | an interval > 1.8 × the expected interval overlaps the impact ±20 ms (checked on every interval, however many gaps the stream has) |
+| `IMPACT_TRUNCATED` | error | the recording starts or ends during the impact (e.g. the sensor dropped out mid-landing), so the peak may be too low |
 | `UNDERSAMPLED_PULSE` | warning | fewer than 5 samples above half peak (the peak may be underestimated) |
 | `SATURATED` | error | see §5 |
 | `NO_IMPACT` | error | no qualifying impact |

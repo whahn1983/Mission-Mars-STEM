@@ -191,15 +191,37 @@ def analyze_capture(
         assert p is not None
         margin = q.impact_gap_margin_ms * 1e6
         lo, hi = p.start_ns - margin, p.end_ns + margin
-        impact_gaps = [g for g in stats.gaps if g["end_ns"] >= lo and g["start_ns"] <= hi]
+        # Gaps are computed from every interval (not the summary list, which
+        # is truncated) so lossy streams cannot hide a gap at the peak.
+        dt_all = np.diff(t)
+        ref_dt = (1e9 / nominal_rate_hz) if nominal_rate_hz else (
+            stats.median_dt_ms * 1e6 if stats.median_dt_ms else None)
+        impact_gaps: list[float] = []
+        if ref_dt:
+            gi = np.nonzero(dt_all > 1.8 * ref_dt)[0]
+            for i in gi:
+                if t[i + 1] >= lo and t[i] <= hi:
+                    impact_gaps.append(float(dt_all[i] / 1e6))
         if impact_gaps:
-            worst = max(g["duration_ms"] for g in impact_gaps)
             flags.append(
                 Flag(
                     "GAPS_IN_IMPACT_WINDOW",
                     "error",
-                    f"{len(impact_gaps)} data gap(s) (up to {worst:.1f} ms) occurred during the impact — "
+                    f"{len(impact_gaps)} data gap(s) (up to {max(impact_gaps):.1f} ms) occurred during the impact — "
                     "the true peak may have been missed.",
+                )
+            )
+        # The capture must contain the whole impact: its start and its release
+        # back to rest. A capture cut off mid-impact (e.g. the sensor dropped
+        # out) can report a peak that is too low.
+        release_ns = det_cfg.release_hold_ms * 1e6
+        if p.start_index == 0 or (int(t[-1]) - p.end_ns) < release_ns:
+            flags.append(
+                Flag(
+                    "IMPACT_TRUNCATED",
+                    "error",
+                    "The recording does not contain the complete impact (it starts or ends during the impact), "
+                    "so the true peak may be higher.",
                 )
             )
         win = (t >= lo) & (t <= hi)

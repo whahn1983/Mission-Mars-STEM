@@ -149,6 +149,16 @@ def parse_profile(raw: dict, *, loaded_from: str | None = None) -> EVBProfile:
         accel_unit=str(s.get("accel_unit") or "g"),
         incremental_query_param=(s.get("incremental") or {}).get("query_param"),
     )
+    if samples.timestamp_unit not in ("s", "ms", "us", "ns"):
+        problems.append("samples.timestamp_unit must be one of s, ms, us, ns")
+    if samples.accel_unit.lower().replace("²", "2") not in ("g", "mg", "m/s2", "m/s^2"):
+        problems.append("samples.accel_unit must be one of g, mg, m/s2")
+    if samples.timestamp_wrap_bits is not None:
+        try:
+            if not 8 <= int(samples.timestamp_wrap_bits) <= 63:
+                raise ValueError
+        except (TypeError, ValueError):
+            problems.append("samples.timestamp_wrap_bits must be an integer between 8 and 63")
     if samples.path is not None and not str(samples.path).startswith("/"):
         problems.append("samples.path must start with '/'")
     if samples.json_layout not in ("objects", "arrays", "columns"):

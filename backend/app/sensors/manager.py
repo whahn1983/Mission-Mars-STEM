@@ -23,7 +23,6 @@ from .base import (
     ConnectionState,
     Sample,
     SensorDisconnectedError,
-    SensorError,
     SensorNotConfiguredError,
 )
 from .csv_replay import CSVReplayAdapter
@@ -70,6 +69,10 @@ class SensorManager:
         self.last_error_at: float | None = None
         self.stream_error: str | None = None
         self.consecutive_failures = 0
+        # Drives the retry delay. Unlike consecutive_failures (reset on every
+        # successful connect, for display), it only resets after real data or
+        # a successful status poll, so "connects but reads fail" still backs off.
+        self._backoff_level = 0
         self.next_retry_at = 0.0
         self.last_status_check = 0.0
         self.status_detail: dict = {}
@@ -207,6 +210,7 @@ class SensorManager:
         self.state = ConnectionState.CONNECTING
         self.streaming = False
         self.consecutive_failures = 0
+        self._backoff_level = 0
         self.next_retry_at = 0.0
         self.stream_error = None
         self._stream_block_until = 0.0
@@ -267,13 +271,13 @@ class SensorManager:
                 self._stream_block_until = now + 15.0
                 self._emit_event("stream_unavailable", {"message": str(exc)})
                 return
-            except SensorError as exc:
+            except Exception as exc:  # noqa: BLE001 — any adapter failure is a sensor failure
                 await self._on_failure(exc)
                 return
         elif not wanted and self.streaming:
             try:
                 await self.adapter.stop_capture()
-            except SensorError as exc:
+            except Exception as exc:  # noqa: BLE001
                 log.warning("stop_capture failed: %s", exc)
             self.streaming = False
             self.state = ConnectionState.CONNECTED
@@ -282,12 +286,13 @@ class SensorManager:
         if self.streaming:
             try:
                 samples = await self.adapter.read_samples()
-            except (SensorError, OSError) as exc:
+            except Exception as exc:  # noqa: BLE001 — parse errors etc. count as failures
                 await self._on_failure(exc)
                 return
             if samples:
                 self.last_success_at = time.time()
                 self.consecutive_failures = 0
+                self._backoff_level = 0
                 self.samples_received += len(samples)
                 self._dispatch(samples)
             elif self.mode == "csv_replay" and getattr(self.adapter, "finished", False):
@@ -300,7 +305,9 @@ class SensorManager:
             try:
                 self.status_detail = await self.adapter.get_status()
                 self.last_success_at = time.time()
-            except (SensorError, OSError) as exc:
+                if not self.streaming and not wanted:
+                    self._backoff_level = 0
+            except Exception as exc:  # noqa: BLE001
                 await self._on_failure(exc)
 
     async def _try_connect(self) -> None:
@@ -314,7 +321,7 @@ class SensorManager:
             self.last_error_at = time.time()
             self.next_retry_at = time.monotonic() + float(self.env.sensor_retry_max_s)
             return
-        except (SensorError, OSError) as exc:
+        except Exception as exc:  # noqa: BLE001
             await self._on_failure(exc, connecting=True)
             return
         self.state = ConnectionState.CONNECTED
@@ -331,17 +338,19 @@ class SensorManager:
         was_streaming = self.streaming
         self.streaming = False
         self.consecutive_failures += 1
+        self._backoff_level = min(self._backoff_level + 1, 64)
         backoff = min(
             float(self.env.sensor_retry_max_s),
-            float(self.env.sensor_retry_initial_s) * (2 ** (self.consecutive_failures - 1)),
+            float(self.env.sensor_retry_initial_s) * (2.0 ** min(self._backoff_level - 1, 30)),
         )
         self.next_retry_at = time.monotonic() + backoff
         self.last_error = str(exc) or type(exc).__name__
         self.last_error_at = time.time()
         self.state = ConnectionState.DISCONNECTED if isinstance(exc, (SensorDisconnectedError, OSError)) else ConnectionState.ERROR
-        if self.consecutive_failures in (1, 2, 5) or self.consecutive_failures % 10 == 0:
+        c = self.consecutive_failures
+        if c in (1, 2, 5) or c % 10 == 0:
             log.warning("Sensor %s failure #%d: %s (retry in %.0fs)", "connect" if connecting else "communication",
-                        self.consecutive_failures, self.last_error, backoff)
+                        c, self.last_error, backoff)
         try:
             await self.adapter.disconnect()
         except Exception:  # noqa: BLE001

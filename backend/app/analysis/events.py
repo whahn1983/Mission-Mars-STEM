@@ -371,12 +371,16 @@ def detect_impacts(
     # Pulse width: contiguous run around the peak above half of the peak rise
     # (full width at half maximum, measured on sensor timestamps).
     half = baseline.magnitude_g + (primary.peak_g - baseline.magnitude_g) / 2.0
+    # The search is not limited to the event bounds: for gentle landings the
+    # half-maximum level lies below the event-start threshold, so the rising
+    # edge begins before the event's first sample.
     hm = np.nan_to_num(mag, nan=0.0) >= half
+    n_all = hm.size
     a0 = k
-    while a0 > s and hm[a0 - 1]:
+    while a0 > 0 and hm[a0 - 1]:
         a0 -= 1
     a1 = k
-    while a1 < e and hm[a1 + 1]:
+    while a1 < n_all - 1 and hm[a1 + 1]:
         a1 += 1
     result.pulse_width_ms = float((t[a1] - t[a0]) / 1e6)
     result.samples_in_pulse = int(a1 - a0 + 1)

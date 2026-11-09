@@ -30,13 +30,15 @@ import numpy as np
 from ..analysis.events import DetectorConfig
 from ..analysis.physics import EARTH_GRAVITY, MARS_GRAVITY
 from ..analysis.pipeline import QualityConfig, analyze_capture
-from ..sensors.base import Sample, samples_to_arrays
+from ..sensors.base import Sample, now_ns, samples_to_arrays
 from ..sensors.manager import SensorManager
 from .hub import Hub
 from .repository import Repository
 from .settings_store import SettingsStore
 
 log = logging.getLogger(__name__)
+
+MAX_RAW_BYTES_PER_TEST = 25 * 1024 * 1024
 
 
 class CaptureState(str, Enum):
@@ -77,6 +79,7 @@ class CaptureService:
         self.test_id: int | None = None
         self.error: str | None = None
         self.armed_at: float | None = None
+        self._armed_mono: float | None = None
         self.triggered_at_wall: float | None = None
         self.trigger_ns: int | None = None
         self.trigger_reason: str | None = None
@@ -88,11 +91,15 @@ class CaptureService:
         self._buffer: deque[Sample] = deque()
         self._buffer_max_s = 12.0
         self._ff_run_start: int | None = None
+        self._ff_run_counted = False
         self._last_sample_wall = 0.0
         self._baseline_started_wall = 0.0
         self._finalize_task: asyncio.Task | None = None
         self._watchdog: asyncio.Task | None = None
         self._raw_payloads: list = []
+        self._raw_bytes = 0
+        self._raw_truncated = False
+        self._dup_at_arm = 0
         self.sim_drop: dict | None = None
         manager.add_listener(self._on_samples)
         manager.add_event_listener(self._on_sensor_event)
@@ -114,7 +121,7 @@ class CaptureService:
             "message": self.message,
             "error": self.error,
             "test_id": self.test_id,
-            "armed_seconds": round(time.time() - self.armed_at, 1) if self.armed_at and self.state in (
+            "armed_seconds": round(time.monotonic() - self._armed_mono, 1) if self._armed_mono and self.state in (
                 CaptureState.BASELINE, CaptureState.ARMED, CaptureState.TRIGGERED) else None,
             "freefall_seen": self.freefall_seen,
             "trigger_reason": self.trigger_reason,
@@ -198,6 +205,8 @@ class CaptureService:
         self.test_id = None
         self.error = None
         self.armed_at = time.time()
+        self._armed_mono = time.monotonic()
+        self._dup_at_arm = int(getattr(self.manager.adapter, "duplicates_dropped", 0) or 0)
         self._baseline_started_wall = time.monotonic()
         self._last_sample_wall = time.monotonic()
         self.manager.request_stream(True)
@@ -226,11 +235,12 @@ class CaptureService:
         """Operator CAPTURE: record the post-trigger window starting now."""
         if self.state not in (CaptureState.BASELINE, CaptureState.ARMED):
             raise CaptureError("Nothing to capture — arm the test first.")
+        if not self._buffer:
+            raise CaptureError("No samples received yet — wait a moment and try again.")
+        last = self._buffer[-1].timestamp_ns
         if self.state == CaptureState.BASELINE:
-            self._accept_baseline(force=True)
-        last = self._buffer[-1].timestamp_ns if self._buffer else None
-        if last is None:
-            raise CaptureError("No samples received yet.")
+            # Keep the buffered samples: they become the pre-trigger data.
+            self._accept_baseline(keep_buffer=True)
         self._trigger(last, "manual")
         return self.snapshot()
 
@@ -238,7 +248,9 @@ class CaptureService:
         if self.state not in (CaptureState.BASELINE, CaptureState.ARMED, CaptureState.TRIGGERED):
             raise CaptureError("No capture is running.")
         if self.state == CaptureState.BASELINE:
-            self._accept_baseline(force=True)
+            if not self._buffer:
+                raise CaptureError("No samples received yet — nothing to analyze. Cancel or wait.")
+            self._accept_baseline(keep_buffer=True)
         self._start_finalize(reason="stopped by operator")
         return self.snapshot()
 
@@ -251,6 +263,7 @@ class CaptureService:
         self.test_id = None
         self.error = None
         self.armed_at = None
+        self._armed_mono = None
         self._set(CaptureState.IDLE, message)
         return self.snapshot()
 
@@ -271,17 +284,34 @@ class CaptureService:
         self.freefall_seen = False
         self.freefall_start_ns = None
         self._ff_run_start = None
+        self._ff_run_counted = False
         self.live_peak_g = None
         self.triggered_at_wall = None
         self.sim_drop = None
+        self._raw_bytes = 0
+        self._raw_truncated = False
         adapter = self.manager.adapter
         if hasattr(adapter, "drain_raw_payloads"):
             adapter.drain_raw_payloads()
 
     def _drain_raw(self) -> None:
         adapter = self.manager.adapter
-        if hasattr(adapter, "drain_raw_payloads"):
-            self._raw_payloads.extend(adapter.drain_raw_payloads())
+        if not hasattr(adapter, "drain_raw_payloads"):
+            return
+        for rp in adapter.drain_raw_payloads():
+            if self._raw_bytes + len(rp.body) > MAX_RAW_BYTES_PER_TEST:
+                self._raw_truncated = True
+                continue
+            self._raw_payloads.append(rp)
+            self._raw_bytes += len(rp.body)
+        # While waiting for the drop, keep only recent responses (like the
+        # sample buffer) so a long armed period does not pile up payloads.
+        if self.state in (CaptureState.BASELINE, CaptureState.ARMED) and self._raw_payloads:
+            cutoff = now_ns() - int((self._buffer_max_s + 2) * 1e9)
+            keep = [rp for rp in self._raw_payloads if rp.received_at_ns >= cutoff]
+            if len(keep) != len(self._raw_payloads):
+                self._raw_payloads = keep
+                self._raw_bytes = sum(len(rp.body) for rp in keep)
 
     def _on_samples(self, samples: list[Sample]) -> None:
         if self.state not in (CaptureState.BASELINE, CaptureState.ARMED, CaptureState.TRIGGERED):
@@ -328,27 +358,55 @@ class CaptureService:
             return
         std = float(mag[ok].std())
         det = DetectorConfig.from_dict(settings.get("detector"))
+        if self._motion_during_baseline(buf, det, float(settings.get("trigger_deviation_g", 1.5))):
+            self.manager.request_stream(False)
+            self._reset_buffers()
+            self.error = ("The lander moved or was released before the baseline was finished. "
+                          "Hold it still on the release point, then press ARM TEST again.")
+            self._set(CaptureState.ERROR, self.error)
+            return
         if std <= det.baseline_max_std_g:
             self._baseline_samples = window
             self._finish_baseline(window, stationary=True)
         elif time.monotonic() - self._baseline_started_wall > 8.0:
-            self._accept_baseline(force=True)
+            self._accept_baseline()
         else:
             self.message = "Hold the lander still — waiting for a steady baseline…"
 
-    def _accept_baseline(self, force: bool = False) -> None:
+    @staticmethod
+    def _motion_during_baseline(buf: list[Sample], det: DetectorConfig, trig_dev: float) -> bool:
+        """True if the buffered baseline data contains a free fall or an
+        impact-sized reading, i.e. the lander was dropped too early."""
+        mags = [math.sqrt(s.ax_g**2 + s.ay_g**2 + s.az_g**2) for s in buf if None not in (s.ax_g, s.ay_g, s.az_g)]
+        if len(mags) < 5:
+            return False
+        ref = float(np.median(mags))
+        if max(mags) - ref > trig_dev:
+            return True
+        run_start = None
+        for s, m in zip((s for s in buf if None not in (s.ax_g, s.ay_g, s.az_g)), mags):
+            if m < det.freefall_threshold_g:
+                if run_start is None:
+                    run_start = s.timestamp_ns
+                elif (s.timestamp_ns - run_start) / 1e6 >= det.freefall_min_ms:
+                    return True
+            else:
+                run_start = None
+        return False
+
+    def _accept_baseline(self, *, keep_buffer: bool = False) -> None:
+        """Accept the most recent window as the baseline even if it is not
+        perfectly still. Requires at least one buffered sample."""
         buf = list(self._buffer)
         if not buf:
-            self.baseline = None
-            self._set(CaptureState.ARMED, "Armed (no baseline samples yet)")
             return
         need_s = float((self.mission.settings if self.mission else {}).get("baseline_s", 0.4))
         cutoff = buf[-1].timestamp_ns - int(need_s * 1e9)
         window = [s for s in buf if s.timestamp_ns >= cutoff]
         self._baseline_samples = window
-        self._finish_baseline(window, stationary=False)
+        self._finish_baseline(window, stationary=False, keep_buffer=keep_buffer)
 
-    def _finish_baseline(self, window: list[Sample], *, stationary: bool) -> None:
+    def _finish_baseline(self, window: list[Sample], *, stationary: bool, keep_buffer: bool = False) -> None:
         t, ax, ay, az = samples_to_arrays(window)
         ok = np.isfinite(ax) & np.isfinite(ay) & np.isfinite(az)
         mag = np.sqrt(ax[ok] ** 2 + ay[ok] ** 2 + az[ok] ** 2)
@@ -359,9 +417,10 @@ class CaptureService:
             "samples": int(ok.sum()),
             "stationary": stationary,
         }
-        # Analysis window starts after the baseline.
+        # Analysis window starts after the baseline (unless the operator forced
+        # a capture/stop, in which case the buffered data is still needed).
         last_ns = window[-1].timestamp_ns if window else None
-        if last_ns is not None:
+        if last_ns is not None and not keep_buffer:
             while self._buffer and self._buffer[0].timestamp_ns <= last_ns:
                 self._buffer.popleft()
         msg = "ARMED — release the lander!" if self.manager.mode != "simulation" else "ARMED — press RELEASE to drop the lander"
@@ -387,13 +446,18 @@ class CaptureService:
             if m < det.freefall_threshold_g:
                 if self._ff_run_start is None:
                     self._ff_run_start = s.timestamp_ns
-                elif not self.freefall_seen and (s.timestamp_ns - self._ff_run_start) / 1e6 >= det.freefall_min_ms:
+                    self._ff_run_counted = False
+                elif not self._ff_run_counted and (s.timestamp_ns - self._ff_run_start) / 1e6 >= det.freefall_min_ms:
+                    # Every qualifying run updates the latch, so an earlier
+                    # bump/lift does not hide the real drop that follows.
+                    self._ff_run_counted = True
                     self.freefall_seen = True
                     self.freefall_start_ns = self._ff_run_start
                     self.message = "FREE FALL!"
                     self._publish()
             else:
                 self._ff_run_start = None
+                self._ff_run_counted = False
             if m - base > trig_dev:
                 recent_ff = self.freefall_seen and self.freefall_start_ns is not None and (
                     s.timestamp_ns - self.freefall_start_ns) < 3e9
@@ -435,12 +499,13 @@ class CaptureService:
                 window = buf
             adapter_info = self.manager.adapter.info
             extra_flags = []
-            if getattr(self.manager.adapter, "duplicates_dropped", 0):
+            dups = int(getattr(self.manager.adapter, "duplicates_dropped", 0) or 0) - self._dup_at_arm
+            if dups > 0:
                 extra_flags.append({
                     "code": "DEVICE_RESENT_SAMPLES", "severity": "info",
-                    "message": f"{self.manager.adapter.duplicates_dropped} re-sent samples with already-seen timestamps were ignored.",
+                    "message": f"{dups} re-sent samples with already-seen timestamps were ignored.",
                 })
-            if getattr(self.manager.adapter, "raw_truncated", False):
+            if self._raw_truncated:
                 extra_flags.append({"code": "RAW_PAYLOADS_TRUNCATED", "severity": "info",
                                     "message": "Raw device responses exceeded the storage limit; parsed samples are complete."})
             test_id = await asyncio.to_thread(
@@ -518,6 +583,7 @@ class CaptureService:
             self.error = detail.get("message") or "Live capture unavailable"
             self._set(CaptureState.ERROR, self.error)
         elif event == "mode_changed" and self.state in (CaptureState.BASELINE, CaptureState.ARMED, CaptureState.TRIGGERED):
+            self.manager.request_stream(False)
             self._reset_buffers()
             self.error = "Sensor mode changed — test cancelled."
             self._set(CaptureState.ERROR, self.error)
@@ -529,9 +595,9 @@ class CaptureService:
             await asyncio.sleep(0.25)
             try:
                 now = time.monotonic()
-                if self.state in (CaptureState.BASELINE, CaptureState.ARMED) and self.armed_at:
+                if self.state in (CaptureState.BASELINE, CaptureState.ARMED) and self._armed_mono:
                     timeout = float((self.mission.settings if self.mission else {}).get("arm_timeout_s", 180))
-                    if time.time() - self.armed_at > timeout:
+                    if now - self._armed_mono > timeout:
                         self.manager.request_stream(False)
                         self.error = f"No landing detected within {timeout:.0f} s — test timed out."
                         self._reset_buffers()
