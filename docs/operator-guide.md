@@ -10,7 +10,7 @@ Open the **operator dashboard** with **Ctrl+Shift+O**, the faint ⚙ in the top-
 
 1. **Build while online:** `docker compose up -d --build` (see README). Open <http://localhost:8080>.
 2. **Rehearse offline:** turn off Wi-Fi/Ethernet, run `docker compose down` then `docker compose up -d`, and do a complete simulated mission. Everything (fonts, 3D, charts) is bundled locally.
-3. **Change the PIN** in `.env`, then run `docker compose up -d` again.
+3. **Change the PIN**: Operator → **System** → Operator PIN. Set the sensor IP and the other `.env` settings on the same tab; `.env` is only needed for the browser port and network access.
 4. **Landing gear (Operator → Landing gear):**
    * Enable only the presets that physically exist.
    * Weigh each complete lander and enter the mass in grams.

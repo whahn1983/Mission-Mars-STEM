@@ -11,6 +11,8 @@ import type {
   SensorSnapshot,
   Series,
   SessionInfo,
+  SystemSettings,
+  SystemView,
   TestDetail,
   TestSummary,
 } from "./types";
@@ -148,6 +150,10 @@ export const api = {
     return request<TestDetail>("POST", "/api/tests/import-csv", undefined, { form: f, timeoutMs: 60000 });
   },
   logs: (level?: string) => get<LogEntry[]>(`/api/logs${qs({ level })}`),
+  system: () => get<SystemView>("/api/system"),
+  updateSystem: (changes: Partial<SystemSettings>) => request<SystemView>("PUT", "/api/system", changes, { timeoutMs: 30000 }),
+  changePin: (new_pin: string) => post<{ ok: boolean }>("/api/system/pin", { new_pin }),
+  resetPin: () => request<{ ok: boolean }>("DELETE", "/api/system/pin"),
   exportUrl: (path: string, params: Record<string, string | number | null | undefined> = {}) =>
     `${path}${qs({ ...params, pin: operatorPin || undefined })}`,
 };

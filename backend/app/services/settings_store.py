@@ -13,6 +13,8 @@ from ..models import SettingRow
 from ..seed import DEFAULT_SETTINGS, ensure_settings
 
 SENSOR_KEYS = ("sensor_mode", "evb_host", "evb_port", "evb_timeout_s")
+# Settings edited on the operator dashboard's System tab (they mirror .env).
+SYSTEM_KEYS = SENSOR_KEYS + ("evb_accel_range_g", "sim_sample_rate_hz", "log_level")
 
 
 def env_defaults(env: Settings) -> dict:
@@ -23,6 +25,11 @@ def env_defaults(env: Settings) -> dict:
             "evb_host": env.evb_host,
             "evb_port": env.evb_port,
             "evb_timeout_s": env.evb_timeout_seconds,
+            "evb_accel_range_g": env.evb_accel_range_g,
+            "sim_sample_rate_hz": env.sim_sample_rate_hz,
+            "log_level": env.log_level.upper(),
+            # None = use OPERATOR_PIN from .env; otherwise a PBKDF2 hash.
+            "operator_pin_hash": None,
             "active_session_id": None,
         }
     )

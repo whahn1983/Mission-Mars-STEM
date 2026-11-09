@@ -333,6 +333,24 @@ export interface DiagnosticsReport {
   profile?: ProfileSummary;
 }
 
+export interface SystemSettings {
+  sensor_mode: SensorMode;
+  evb_host: string;
+  evb_port: number;
+  evb_timeout_s: number;
+  evb_accel_range_g: number;
+  sim_sample_rate_hz: number;
+  log_level: "DEBUG" | "INFO" | "WARNING" | "ERROR";
+}
+
+export interface SystemView {
+  settings: SystemSettings;
+  env_values: SystemSettings;
+  operator_pin_source: "dashboard" | "env" | "disabled";
+  docker: { app_port: string; app_bind: string; data_dir: string; database_url: string; evb_profile_path: string };
+  config_warnings: string[];
+}
+
 export interface ProbeResult {
   url: string;
   status?: number;

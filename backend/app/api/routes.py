@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from datetime import datetime, timezone
@@ -20,8 +21,11 @@ from ..sensors.csv_format import CSVFormatError, parse_csv_bytes
 from ..sensors.diagnostics import http_probe, run_diagnostics
 from ..services.capture import CaptureError
 from ..services.export import samples_csv, session_zip, tests_csv
-from .deps import get_runtime, require_operator
-from ..runtime import Runtime
+from .deps import get_runtime, pin_source, require_operator
+from ..runtime import Runtime, apply_log_level
+from ..services.capture import CaptureState
+from ..services.pin import hash_pin
+from ..services.settings_store import SYSTEM_KEYS
 from ..seed import restore_default_configuration
 
 router = APIRouter(prefix="/api")
@@ -69,7 +73,7 @@ async def state(rt: Runtime = Depends(get_runtime)) -> dict:
         "capture": _cap(rt).snapshot(),
         "settings": {k: s.get(k) for k in PUBLIC_SETTING_KEYS},
         "active_session_id": s.get("active_session_id"),
-        "operator_pin_required": bool(rt.env.operator_pin),
+        "operator_pin_required": pin_source(rt) != "disabled",
         "counts": rt.repo.counts(),
     }
 
@@ -413,9 +417,9 @@ def get_settings_all(rt: Runtime = Depends(get_runtime)) -> dict:
 
 @router.patch("/settings", dependencies=operator)
 def update_settings(body: dict, rt: Runtime = Depends(get_runtime)) -> dict:
-    blocked = {"sensor_mode", "evb_host", "evb_port", "evb_timeout_s", "active_session_id"}
+    blocked = set(SYSTEM_KEYS) | {"active_session_id", "operator_pin_hash"}
     if blocked & set(body):
-        raise HTTPException(400, "Use the sensor and session endpoints for those settings")
+        raise HTTPException(400, "Use the System, sensor and session endpoints for those settings")
     if "drop_height_m" in body:
         h = float(body["drop_height_m"])
         if not 0 < h <= 3:
@@ -431,6 +435,7 @@ def update_settings(body: dict, rt: Runtime = Depends(get_runtime)) -> dict:
 @router.post("/settings/restore-defaults", dependencies=operator)
 async def restore_settings(rt: Runtime = Depends(get_runtime)) -> dict:
     res = rt.store.restore_defaults()
+    apply_log_level(str(res.get("log_level") or "INFO"))
     await _mgr(rt).set_mode(res["sensor_mode"])
     rt.hub.publish({"type": "settings", "settings": {k: res.get(k) for k in PUBLIC_SETTING_KEYS}})
     return res
@@ -539,3 +544,91 @@ async def sensor_replay_upload(
 @router.get("/logs", dependencies=operator)
 def logs(level: str | None = None, limit: int = Query(default=200, le=400), rt: Runtime = Depends(get_runtime)) -> list[dict]:
     return rt.logbuf.recent(level=level, limit=limit)
+
+
+# ----------------------------------------------------------------- system settings
+# The operator dashboard's "System" tab: the .env settings that can change at
+# runtime. Values are stored in the database and take precedence over .env.
+
+class SystemUpdate(BaseModel):
+    sensor_mode: Literal["simulation", "evb_lite", "csv_replay"] | None = None
+    evb_host: str | None = Field(default=None, max_length=255)
+    evb_port: int | None = Field(default=None, ge=1, le=65535)
+    evb_timeout_s: float | None = Field(default=None, ge=0.5, le=60)
+    evb_accel_range_g: float | None = Field(default=None, ge=1, le=400)
+    sim_sample_rate_hz: float | None = Field(default=None, ge=50, le=20000)
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR"] | None = None
+
+
+class PinChange(BaseModel):
+    new_pin: str = Field(min_length=4, max_length=32, pattern=r"^[A-Za-z0-9]+$")
+
+
+def _system_view(rt: Runtime) -> dict:
+    s = rt.store.all()
+    env = rt.env
+    return {
+        "settings": {k: s.get(k) for k in SYSTEM_KEYS},
+        "env_values": {
+            "sensor_mode": env.sensor_mode,
+            "evb_host": env.evb_host,
+            "evb_port": env.evb_port,
+            "evb_timeout_s": env.evb_timeout_seconds,
+            "evb_accel_range_g": env.evb_accel_range_g,
+            "sim_sample_rate_hz": env.sim_sample_rate_hz,
+            "log_level": env.log_level.upper(),
+        },
+        "operator_pin_source": pin_source(rt),
+        "docker": {
+            # Fixed by Docker before the app starts; shown for reference only.
+            "app_port": os.environ.get("APP_PORT") or "8080",
+            "app_bind": os.environ.get("APP_BIND") or "127.0.0.1",
+            "data_dir": str(env.data_dir),
+            "database_url": env.database_url,
+            "evb_profile_path": str(env.evb_profile_path),
+        },
+        "config_warnings": list(env.config_warnings),
+    }
+
+
+@router.get("/system", dependencies=operator)
+async def get_system(rt: Runtime = Depends(get_runtime)) -> dict:
+    return _system_view(rt)
+
+
+@router.put("/system", dependencies=operator)
+async def update_system(body: SystemUpdate, rt: Runtime = Depends(get_runtime)) -> dict:
+    changes = body.model_dump(exclude_none=True)
+    if "evb_host" in changes:
+        changes["evb_host"] = changes["evb_host"].strip()
+        if not _HOST_RE.match(changes["evb_host"]):
+            raise HTTPException(400, "Sensor address must be an IP address or hostname")
+    if not changes:
+        return _system_view(rt)
+    current = rt.store.all()
+    changed = {k: v for k, v in changes.items() if current.get(k) != v}
+    sensor_keys = changed.keys() - {"log_level"}
+    busy = _cap(rt).state in (CaptureState.BASELINE, CaptureState.ARMED, CaptureState.TRIGGERED, CaptureState.ANALYZING)
+    if sensor_keys and busy:
+        raise HTTPException(409, "A test is in progress. Finish or cancel it before changing sensor settings.")
+    rt.store.update(changes)
+    if "log_level" in changed:
+        apply_log_level(changed["log_level"])
+    mgr = _mgr(rt)
+    if "sensor_mode" in changed:
+        await mgr.set_mode(changed["sensor_mode"])  # builds the adapter with all new values
+    elif sensor_keys:
+        await mgr.rebuild_adapter()
+    return _system_view(rt)
+
+
+@router.post("/system/pin", dependencies=operator)
+def change_pin(body: PinChange, rt: Runtime = Depends(get_runtime)) -> dict:
+    rt.store.update({"operator_pin_hash": hash_pin(body.new_pin)})
+    return {"ok": True, "operator_pin_source": "dashboard"}
+
+
+@router.delete("/system/pin", dependencies=operator)
+def reset_pin(rt: Runtime = Depends(get_runtime)) -> dict:
+    rt.store.update({"operator_pin_hash": None})
+    return {"ok": True, "operator_pin_source": pin_source(rt)}

@@ -42,6 +42,12 @@ def configure_logging(env: Settings, buffer: LogBuffer) -> None:
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
+def apply_log_level(level: str) -> None:
+    lv = getattr(logging, level.upper(), None)
+    if isinstance(lv, int):
+        logging.getLogger().setLevel(lv)
+
+
 class Runtime:
     def __init__(self, env: Settings) -> None:
         self.env = env
@@ -64,6 +70,8 @@ class Runtime:
     async def startup(self, *, configure_logs: bool = True) -> None:
         if configure_logs:
             configure_logging(self.env, self.logbuf)
+        for w in self.env.config_warnings:
+            log.warning("Configuration: %s", w)
         for d in (self.env.data_dir, self.photos_dir, self.discovery_dir):
             try:
                 d.mkdir(parents=True, exist_ok=True)
@@ -73,6 +81,7 @@ class Runtime:
         with self.db.session() as s:
             seed_defaults(s)
         self.store.load()
+        apply_log_level(str(self.store.get("log_level") or self.env.log_level))
         self.manager = SensorManager(self.env, self.store, self.hub, self.db)
         self.capture = CaptureService(self.manager, self.repo, self.store, self.hub)
         await self.manager.start()

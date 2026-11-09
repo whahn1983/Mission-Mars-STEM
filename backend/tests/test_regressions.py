@@ -254,3 +254,33 @@ def test_profile_rejects_unknown_units():
     p = parse_profile(raw)
     assert not p.streaming_ready
     assert any("timestamp_unit" in x for x in p.problems) and any("accel_unit" in x for x in p.problems)
+
+
+# ---------------------------------------------------------------- configuration
+@pytest.mark.parametrize("url", [
+    "sqlite:///C:/Users/someone/Downloads/Mission-Mars-STEM/data/mars_lander.db",
+    "sqlite:///C:\\Users\\someone\\mars.db",
+])
+def test_windows_database_path_falls_back_to_data_volume(tmp_path, url):
+    from app.config import Settings
+    s = Settings(database_url=url, data_dir=tmp_path)
+    assert s.database_url == f"sqlite:///{(tmp_path / 'mars_lander.db').as_posix()}"
+    assert s.config_warnings and "Windows path" in s.config_warnings[0]
+
+
+def test_container_and_relative_database_paths_are_kept(tmp_path):
+    from app.config import Settings
+    assert Settings(database_url="sqlite:////data/mars_lander.db").database_url == "sqlite:////data/mars_lander.db"
+    s = Settings(database_url="sqlite:///../data/dev.db", data_dir=tmp_path)
+    assert s.database_url == "sqlite:///../data/dev.db" and not s.config_warnings
+
+
+def test_app_starts_with_a_windows_database_url(tmp_path):
+    from fastapi.testclient import TestClient
+    from app.config import Settings
+    from app.main import create_app
+    env = Settings(database_url="sqlite:///C:/Users/someone/Downloads/x/mars_lander.db", data_dir=tmp_path,
+                   evb_profile_path=tmp_path / "p.json", static_dir=tmp_path / "static")
+    with TestClient(create_app(env, configure_logs=False)) as c:
+        assert c.get("/api/health").json()["status"] == "ok"
+    assert (tmp_path / "mars_lander.db").exists()

@@ -8,11 +8,13 @@ SQLite ``settings`` table and take precedence until the operator chooses
 
 from __future__ import annotations
 
+import os
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 SensorMode = Literal["simulation", "evb_lite", "csv_replay"]
@@ -58,6 +60,31 @@ class Settings(BaseSettings):
         if v == "" or v is None:
             return None
         return v
+
+    # Problems found while loading the configuration (logged at start-up).
+    config_warnings: list[str] = Field(default_factory=list, exclude=True)
+
+    @model_validator(mode="after")
+    def _container_safe_database_url(self) -> "Settings":
+        """Reject a Windows SQLite path when running on Linux (the container).
+
+        A path like C:/Users/... - typically leaked from a DATABASE_URL set in
+        .env or in the Windows environment - cannot work inside the Linux
+        container. Fall back to the data volume and warn, instead of
+        crash-looping at start-up.
+        """
+        prefix = "sqlite:///"
+        if os.name != "nt" and self.database_url.startswith(prefix):
+            path = self.database_url[len(prefix):]
+            if re.match(r"^[A-Za-z]:[\\/]", path) or "\\" in path:
+                fallback = f"sqlite:///{(self.data_dir / 'mars_lander.db').as_posix()}"
+                self.config_warnings.append(
+                    f"DATABASE_URL {self.database_url!r} is a Windows path, which does not exist inside the "
+                    f"container; using {fallback!r} (the mission-data volume) instead. Remove DATABASE_URL "
+                    "from .env and from your Windows environment variables."
+                )
+                self.database_url = fallback
+        return self
 
     @property
     def sqlite_path(self) -> Path | None:
