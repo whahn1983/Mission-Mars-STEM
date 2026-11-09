@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { api, ApiError } from "../api/client";
-import type { Configuration, DiagnosticsReport, LogEntry, ProbeResult, SensorMode, SessionInfo, TestSummary } from "../api/types";
+import { api, ApiError, setOperatorPin } from "../api/client";
+import type { Configuration, DiagnosticsReport, LogEntry, ProbeResult, SensorMode, SessionInfo, SystemSettings, SystemView, TestSummary } from "../api/types";
 import { Badge, Button, Field, inputCls, Modal, Panel, Segmented, Stat, Toggle } from "../components/ui";
 import { ago, fmtDateTime, fmtG, fmtHeight, fmtNum, SOURCE_LABEL } from "../lib/format";
 import { useStore } from "../state/store";
 
-type Tab = "station" | "sensor" | "gear" | "data" | "analysis" | "logs";
+type Tab = "station" | "system" | "sensor" | "gear" | "data" | "analysis" | "logs";
 
 function useAction() {
   const notify = useStore((s) => s.notify);
@@ -717,10 +717,7 @@ function AnalysisTab({ settings, reload }: { settings: Record<string, unknown>; 
         <NumberRanges value={(settings.prediction_ranges_g as [number, number][]) ?? []} onSave={(v) => save({ prediction_ranges_g: v })} />
       </Panel>
       <Panel title="Restore">
-        <p className="mb-3 text-sm text-slate-400">Restore every setting (including sensor mode and address) to the values from the .env file.</p>
-        <Button variant="danger" onClick={() => run(() => api.restoreSettings(), "Settings restored").then(reload)}>
-          Restore defaults from .env
-        </Button>
+        <p className="text-sm text-slate-400">To restore every setting to the values from the .env file, use System → Restore defaults from .env.</p>
       </Panel>
     </div>
   );
@@ -746,6 +743,232 @@ function NumberRanges({ value, onSave }: { value: [number, number][]; onSave: (v
       >
         Save
       </Button>
+    </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------------- system
+const MODE_OPTIONS: { value: SensorMode; label: string }[] = [
+  { value: "simulation", label: "Simulation" },
+  { value: "evb_lite", label: "EVB Lite" },
+  { value: "csv_replay", label: "CSV replay" },
+];
+
+function EnvHint({ current, envValue, unit = "" }: { current: unknown; envValue: unknown; unit?: string }) {
+  if (String(current ?? "") === String(envValue ?? "")) return <span>Same as .env</span>;
+  return (
+    <span>
+      .env value: <code>{envValue === "" || envValue == null ? "(empty)" : `${envValue}${unit}`}</code>
+    </span>
+  );
+}
+
+function SystemTab() {
+  const { busy, run } = useAction();
+  const notify = useStore((s) => s.notify);
+  const lock = useStore((s) => s.lockOperator);
+  const refresh = useStore((s) => s.refresh);
+  const [view, setView] = useState<SystemView | null>(null);
+  const [form, setForm] = useState<SystemSettings | null>(null);
+  const [pin1, setPin1] = useState("");
+  const [pin2, setPin2] = useState("");
+
+  const load = useCallback(() => {
+    api
+      .system()
+      .then((v) => {
+        setView(v);
+        setForm(v.settings);
+      })
+      .catch(() => undefined);
+  }, []);
+  useEffect(load, [load]);
+
+  if (!view || !form) return <div className="p-6 text-slate-400">Loading…</div>;
+  const env = view.env_values;
+  const set = <K extends keyof SystemSettings>(k: K, v: SystemSettings[K]) => setForm({ ...form, [k]: v });
+  const save = (keys: (keyof SystemSettings)[], msg: string) => {
+    const changes: Partial<SystemSettings> = {};
+    for (const k of keys) (changes as Record<string, unknown>)[k] = form[k];
+    return run(() => api.updateSystem(changes), msg).then((v) => {
+      if (v) {
+        setView(v);
+        setForm(v.settings);
+        refresh().catch(() => undefined);
+      }
+    });
+  };
+  const changePin = async () => {
+    if (pin1.length < 4 || !/^[A-Za-z0-9]+$/.test(pin1)) return notify("error", "PIN must be at least 4 letters or digits.");
+    if (pin1 !== pin2) return notify("error", "The two PINs do not match.");
+    const ok = await run(() => api.changePin(pin1), "Operator PIN changed");
+    if (ok) {
+      setOperatorPin(pin1); // keep this browser unlocked
+      setPin1("");
+      setPin2("");
+      load();
+    }
+  };
+  const afterPinReset = () => {
+    // The PIN may have changed: ask for it again.
+    api.verifyPin().catch(() => {
+      lock();
+      notify("info", "The operator PIN is back to the .env value — unlock again.");
+    });
+  };
+  const num = (v: string, fallback: number) => (Number.isFinite(Number(v)) && v !== "" ? Number(v) : fallback);
+
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="rounded-xl border border-telemetry/20 bg-telemetry/5 px-4 py-3 text-sm text-slate-300 lg:col-span-2">
+        These are the settings from the <code>.env</code> file. You don't need to edit the file: changes made here are saved in the app
+        and take effect immediately (they take precedence over <code>.env</code>). Only the port and network access below must be set in{" "}
+        <code>.env</code>, because Docker fixes them before the app starts.
+      </div>
+      {view.config_warnings.map((w) => (
+        <div key={w} className="rounded-xl border border-caution/40 bg-caution/10 px-4 py-2 text-sm text-amber-200 lg:col-span-2">
+          ⚠ {w}
+        </div>
+      ))}
+
+      <Panel title="Sensor connection">
+        <div className="flex flex-col gap-3">
+          <Field label="Sensor mode (SENSOR_MODE)" hint={<EnvHint current={form.sensor_mode} envValue={env.sensor_mode} />}>
+            <Segmented value={form.sensor_mode} onChange={(v) => set("sensor_mode", v)} options={MODE_OPTIONS} />
+          </Field>
+          <div className="grid grid-cols-[1fr_150px] gap-2">
+            <Field label="EVB Lite IP address (EVB_HOST)" hint={<EnvHint current={form.evb_host} envValue={env.evb_host} />}>
+              <input className={inputCls} value={form.evb_host} placeholder="192.168.1.50" onChange={(e) => set("evb_host", e.target.value)} />
+            </Field>
+            <Field label="Port (EVB_PORT)" hint={<EnvHint current={form.evb_port} envValue={env.evb_port} />}>
+              <input className={inputCls} inputMode="numeric" value={String(form.evb_port)} onChange={(e) => set("evb_port", num(e.target.value, form.evb_port))} />
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Request timeout, s (EVB_TIMEOUT_SECONDS)" hint={<EnvHint current={form.evb_timeout_s} envValue={env.evb_timeout_s} unit=" s" />}>
+              <input className={inputCls} inputMode="decimal" value={String(form.evb_timeout_s)} onChange={(e) => set("evb_timeout_s", num(e.target.value, form.evb_timeout_s))} />
+            </Field>
+            <Field label="Sensor range ± g (EVB_ACCEL_RANGE_G)" hint={<EnvHint current={form.evb_accel_range_g} envValue={env.evb_accel_range_g} unit=" g" />}>
+              <select className={inputCls} value={String(form.evb_accel_range_g)} onChange={(e) => set("evb_accel_range_g", Number(e.target.value))}>
+                {[2, 4, 8, 16, 32, 64, 200].concat([2, 4, 8, 16, 32, 64, 200].includes(form.evb_accel_range_g) ? [] : [form.evb_accel_range_g]).map((g) => (
+                  <option key={g} value={g}>
+                    ±{g} g{g === 16 ? " (EVB Lite)" : ""}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <p className="text-xs text-slate-500">Use the sensor's IP address, not a .local name. The range must match the range set on the sensor — it is used to detect over-range (saturated) readings.</p>
+          <div>
+            <Button disabled={busy} onClick={() => save(["sensor_mode", "evb_host", "evb_port", "evb_timeout_s", "evb_accel_range_g"], "Sensor settings saved — reconnecting")}>
+              Save sensor settings
+            </Button>
+          </div>
+        </div>
+      </Panel>
+
+      <div className="flex flex-col gap-4">
+        <Panel title="Operator PIN (OPERATOR_PIN)">
+          <div className="mb-3 text-sm text-slate-300">
+            Current PIN comes from:{" "}
+            {view.operator_pin_source === "dashboard" ? (
+              <Badge tone="go">this dashboard</Badge>
+            ) : view.operator_pin_source === "env" ? (
+              <Badge tone="info">.env (default 1113)</Badge>
+            ) : (
+              <Badge tone="caution">disabled</Badge>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="New PIN">
+              <input className={`${inputCls} font-mono tracking-widest`} type="password" inputMode="numeric" value={pin1} onChange={(e) => setPin1(e.target.value)} />
+            </Field>
+            <Field label="Repeat new PIN">
+              <input className={`${inputCls} font-mono tracking-widest`} type="password" inputMode="numeric" value={pin2} onChange={(e) => setPin2(e.target.value)} onKeyDown={(e) => e.key === "Enter" && changePin()} />
+            </Field>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button disabled={busy || !pin1} onClick={changePin}>
+              Change PIN
+            </Button>
+            {view.operator_pin_source === "dashboard" && (
+              <Button variant="ghost" disabled={busy} onClick={() => run(() => api.resetPin(), "PIN reverted to the .env value").then(afterPinReset)}>
+                Use the .env PIN again
+              </Button>
+            )}
+          </div>
+          <p className="mt-2 text-xs text-slate-500">
+            Forgot a PIN set here? On the laptop run <code>docker compose exec app python -m app.cli reset-pin</code>.
+          </p>
+        </Panel>
+
+        <Panel title="Simulation & logging">
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Simulator sample rate, Hz (SIM_SAMPLE_RATE_HZ)" hint={<EnvHint current={form.sim_sample_rate_hz} envValue={env.sim_sample_rate_hz} unit=" Hz" />}>
+              <input className={inputCls} inputMode="numeric" value={String(form.sim_sample_rate_hz)} onChange={(e) => set("sim_sample_rate_hz", num(e.target.value, form.sim_sample_rate_hz))} />
+            </Field>
+            <Field label="Log level (LOG_LEVEL)" hint={<EnvHint current={form.log_level} envValue={env.log_level} />}>
+              <select className={inputCls} value={form.log_level} onChange={(e) => set("log_level", e.target.value as SystemSettings["log_level"])}>
+                {["DEBUG", "INFO", "WARNING", "ERROR"].map((l) => (
+                  <option key={l}>{l}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <p className="mt-2 text-xs text-slate-500">The reproducible-simulation seed (SIM_SEED) is under Station → Simulation.</p>
+          <Button className="mt-3" disabled={busy} onClick={() => save(["sim_sample_rate_hz", "log_level"], "Saved")}>
+            Save
+          </Button>
+        </Panel>
+      </div>
+
+      <Panel title="Docker settings (set in .env)">
+        <table className="w-full text-sm">
+          <tbody>
+            <tr className="border-b border-space-700">
+              <td className="py-1.5 text-slate-400">Browser port (APP_PORT)</td>
+              <td className="py-1.5 text-right font-mono">{view.docker.app_port}</td>
+            </tr>
+            <tr className="border-b border-space-700">
+              <td className="py-1.5 text-slate-400">Network access (APP_BIND)</td>
+              <td className="py-1.5 text-right">
+                <span className="font-mono">{view.docker.app_bind}</span>{" "}
+                <span className="text-slate-500">{view.docker.app_bind === "0.0.0.0" ? "— other devices on the network can connect" : "— this laptop only"}</span>
+              </td>
+            </tr>
+            <tr className="border-b border-space-700">
+              <td className="py-1.5 text-slate-400">Test data</td>
+              <td className="py-1.5 text-right text-slate-300">Docker volume <code>mission-data</code> ({view.docker.data_dir})</td>
+            </tr>
+            <tr>
+              <td className="py-1.5 text-slate-400">EVB profile file</td>
+              <td className="py-1.5 text-right font-mono text-xs">{view.docker.evb_profile_path}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p className="mt-2 text-xs text-slate-500">
+          To change the port or network access: edit <code>.env</code> next to <code>docker-compose.yml</code>, then run <code>docker compose up -d</code>.
+        </p>
+      </Panel>
+
+      <Panel title="Restore">
+        <p className="mb-3 text-sm text-slate-400">
+          Put every setting back to the values from the .env file (or the built-in defaults): sensor, simulation, logging, operator PIN, drop height and analysis thresholds. Test data is not touched.
+        </p>
+        <Button
+          variant="danger"
+          disabled={busy}
+          onClick={() =>
+            run(() => api.restoreSettings(), "Settings restored from .env").then(() => {
+              load();
+              afterPinReset();
+            })
+          }
+        >
+          Restore defaults from .env
+        </Button>
+      </Panel>
     </div>
   );
 }
@@ -803,6 +1026,7 @@ export function OperatorPanel() {
 
   const tabs: { value: Tab; label: string }[] = [
     { value: "station", label: "Station" },
+    { value: "system", label: "System" },
     { value: "sensor", label: "Sensor" },
     { value: "gear", label: "Landing gear" },
     { value: "data", label: "Data & export" },
@@ -823,6 +1047,7 @@ export function OperatorPanel() {
             </Button>
           </div>
           {tab === "station" && settings && <StationTab key={settingsKey} settings={settings} reload={loadSettings} />}
+          {tab === "system" && <SystemTab />}
           {tab === "sensor" && <SensorTab />}
           {tab === "gear" && <GearTab />}
           {tab === "data" && <DataTab />}

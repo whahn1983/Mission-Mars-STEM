@@ -42,6 +42,12 @@ def configure_logging(env: Settings, buffer: LogBuffer) -> None:
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
 
+def apply_log_level(level: str) -> None:
+    lv = getattr(logging, level.upper(), None)
+    if isinstance(lv, int):
+        logging.getLogger().setLevel(lv)
+
+
 class Runtime:
     def __init__(self, env: Settings) -> None:
         self.env = env
@@ -75,6 +81,7 @@ class Runtime:
         with self.db.session() as s:
             seed_defaults(s)
         self.store.load()
+        apply_log_level(str(self.store.get("log_level") or self.env.log_level))
         self.manager = SensorManager(self.env, self.store, self.hub, self.db)
         self.capture = CaptureService(self.manager, self.repo, self.store, self.hub)
         await self.manager.start()

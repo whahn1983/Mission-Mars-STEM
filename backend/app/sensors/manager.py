@@ -57,7 +57,7 @@ class SensorManager:
         self.mode: str = store.get("sensor_mode") or "simulation"
         if self.mode not in MODES:
             self.mode = "simulation"
-        self.replay = CSVReplayAdapter(range_g=env.evb_accel_range_g)
+        self.replay = CSVReplayAdapter(range_g=float(store.get("evb_accel_range_g") or env.evb_accel_range_g))
         self.profile = load_profile(env.evb_profile_path)
         self.adapter = self._build_adapter(self.mode)
 
@@ -92,10 +92,14 @@ class SensorManager:
         self._wake = asyncio.Event()
 
     # ------------------------------------------------------------ adapters
+    def _setting_range_g(self) -> float:
+        return float(self.store.get("evb_accel_range_g") or self.env.evb_accel_range_g)
+
     def _build_adapter(self, mode: str):
         if mode == "simulation":
             return SimulatedAccelerometerAdapter(
-                sample_rate_hz=self.env.sim_sample_rate_hz, range_g=self.env.evb_accel_range_g
+                sample_rate_hz=float(self.store.get("sim_sample_rate_hz") or self.env.sim_sample_rate_hz),
+                range_g=self._setting_range_g(),
             )
         if mode == "evb_lite":
             return EVBLiteAdapter(
@@ -103,15 +107,17 @@ class SensorManager:
                 port=int(self.store.get("evb_port") or 80),
                 timeout_s=float(self.store.get("evb_timeout_s") or self.env.evb_timeout_seconds),
                 profile=self.profile,
-                range_g=self.env.evb_accel_range_g,
+                range_g=self._setting_range_g(),
             )
         if mode == "csv_replay":
+            self.replay.range_g = self._setting_range_g()
+            self.replay.info.accel_range_g = self.replay.range_g
             return self.replay
         raise ValueError(f"Unknown sensor mode {mode!r}")
 
     @property
     def range_g(self) -> float:
-        return float(self.adapter.info.accel_range_g or self.env.evb_accel_range_g)
+        return float(self.adapter.info.accel_range_g or self._setting_range_g())
 
     def add_listener(self, cb: Callable[[list[Sample]], None]) -> None:
         self._listeners.append(cb)
@@ -179,6 +185,15 @@ class SensorManager:
                 await self._safe_disconnect()
                 self.adapter = self._build_adapter("evb_lite")
                 self._reset_connection_state()
+        self.publish_status(force=True)
+
+    async def rebuild_adapter(self) -> None:
+        """Re-create the current adapter so changed settings take effect."""
+        async with self._lock:
+            await self._safe_disconnect()
+            self.adapter = self._build_adapter(self.mode)
+            self._reset_connection_state()
+        self._emit_event("mode_changed", {"mode": self.mode})
         self.publish_status(force=True)
 
     async def reload_profile(self) -> dict:

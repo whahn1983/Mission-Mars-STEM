@@ -28,12 +28,10 @@ cd C:\MissionMars
 ```
 
 ```powershell
-Copy-Item .env.example .env
-```
-
-```powershell
 docker compose up -d --build
 ```
+
+A `.env` file is optional. Every setting except the port and network access can be entered in the app under **Operator → System** (see *Configuration* below).
 
 4. Open **<http://localhost:8080>** in Chrome or Edge.
 
@@ -78,6 +76,7 @@ Or press **F11**, or click the ⛶ button in the header.
 
 ### Operator dashboard (Ctrl+Shift+O, PIN = `OPERATOR_PIN`, default `1113`)
 
+* **System:** the `.env` settings, editable in the app: sensor mode, sensor IP, port, timeout and range, operator PIN, simulator sample rate, log level, and *Restore defaults from .env*
 * **Station:** one-click **Reset student mission (all screens)**, clear the current test, start/stop capture, drop height, simulation gravity and seed, idle auto-reset
 * **Sensor:** mode (Simulation / EVB Lite / CSV replay), sensor IP, connect/disconnect, diagnostics, observed sample rate, battery (if reported), last contact, errors, read-only discovery probe, replay upload
 * **Landing gear:** enable only the versions you built, enter measured masses, colours, photos, advanced 3D/simulation parameters
@@ -102,26 +101,36 @@ The full event-night runbook is in [`docs/operator-guide.md`](docs/operator-guid
 
 ---
 
-## Configuration (`.env`)
+## Configuration
 
-| Variable | Default | Meaning |
+**In the app (recommended):** Operator dashboard → **System**. Settings saved there are stored in the app's database, take effect immediately, survive restarts and take precedence over `.env`. *Restore defaults from .env* on the same tab re-applies the file.
+
+**In `.env` (optional):** copy `.env.example` to `.env` next to `docker-compose.yml`. It is only *required* for `APP_PORT` and `APP_BIND`: Docker applies those before the app starts. After editing `.env`, run `docker compose up -d`. Variables set in your Windows environment, for example for other projects, are **not** read. Only the `.env` file is.
+
+| Variable | Default | Meaning | Also in the app |
+|---|---|---|---|
 |---|---|---|
-| `APP_PORT` | `8080` | Browser port on the laptop |
-| `APP_BIND` | `127.0.0.1` | `127.0.0.1` = this laptop only; `0.0.0.0` = other devices on the network may connect |
-| `SENSOR_MODE` | `simulation` | `simulation`, `evb_lite`, `csv_replay` |
-| `EVB_HOST` | *(empty)* | Sensor IP address (preferred) or hostname |
-| `EVB_PORT` | `80` | Sensor HTTP port |
-| `EVB_TIMEOUT_SECONDS` | `5` | Per-request timeout |
-| `EVB_ACCEL_RANGE_G` | `16` | Per-axis full scale used for saturation detection |
-| `EVB_PROFILE_PATH` | `/app/config/evb_profile.json` | Verified protocol profile (`./config` is mounted read-only) |
-| `OPERATOR_PIN` | `1113` | Operator dashboard PIN; empty disables it (only with `APP_BIND=127.0.0.1`) |
-| `SIM_SAMPLE_RATE_HZ` | `1600` | Simulator sample rate |
-| `SIM_SEED` | *(empty)* | Fixed seed for reproducible simulated drops |
-| `LOG_LEVEL` | `INFO` | |
+| `APP_PORT` | `8080` | Browser port on the laptop | shown (read-only) |
+| `APP_BIND` | `127.0.0.1` | `127.0.0.1` = this laptop only; `0.0.0.0` = other devices on the network may connect | shown (read-only) |
+| `SENSOR_MODE` | `simulation` | `simulation`, `evb_lite`, `csv_replay` | System |
+| `EVB_HOST` | *(empty)* | Sensor IP address (preferred) or hostname | System |
+| `EVB_PORT` | `80` | Sensor HTTP port | System |
+| `EVB_TIMEOUT_SECONDS` | `5` | Per-request timeout | System |
+| `EVB_ACCEL_RANGE_G` | `16` | Per-axis full scale used for saturation detection | System |
+| `EVB_PROFILE_PATH` | `/app/config/evb_profile.json` | Verified protocol profile (`./config` is mounted read-only) | — |
+| `OPERATOR_PIN` | `1113` | Operator dashboard PIN; empty disables it (only with `APP_BIND=127.0.0.1`) | System (change PIN) |
+| `SIM_SAMPLE_RATE_HZ` | `1600` | Simulator sample rate | System |
+| `SIM_SEED` | *(empty)* | Fixed seed for reproducible simulated drops | Station → Simulation |
+| `LOG_LEVEL` | `INFO` | | System |
+
+A PIN changed in the app is stored only as a salted hash. If you forget it, run this on the laptop to go back to the `.env` PIN:
+
+```powershell
+docker compose exec app python -m app.cli reset-pin
+```
 
 Test data always lives in the `mission-data` Docker volume (`/data/mars_lander.db` inside the container). Its location is fixed in `docker-compose.yml` and is not configurable through `.env`. Do **not** set `DATABASE_URL` to a Windows path: the container cannot see your C: drive. If you do, the app ignores it, falls back to the volume, and logs a warning.
 
-`.env` values are **start-up defaults**. Changes made in the operator dashboard are saved in the database and win. **Operator → Analysis → Restore defaults from .env** re-applies `.env`. After editing `.env`, run `docker compose up -d` to apply it.
 
 ---
 
