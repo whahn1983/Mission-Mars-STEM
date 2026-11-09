@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 from sqlalchemy import func, insert, select
+from sqlalchemy.orm import defer
 
 from ..analysis.outcome import ChallengeCriteria, compare_prediction, evaluate_outcome
 from ..db import Database
@@ -305,7 +306,7 @@ class Repository:
         offset: int = 0,
     ) -> list[dict]:
         with self.db.session() as s:
-            q = select(Test).order_by(Test.timestamp.desc(), Test.id.desc())
+            q = select(Test).options(defer(Test.analysis_json)).order_by(Test.timestamp.desc(), Test.id.desc())
             if session_id is not None:
                 q = q.where(Test.session_id == session_id)
             if data_origin:
@@ -378,7 +379,7 @@ class Repository:
         gravity_m_s2: float | None = None,
     ) -> dict:
         with self.db.session() as s:
-            q = select(Test).where(Test.data_origin == data_origin)
+            q = select(Test).options(defer(Test.analysis_json)).where(Test.data_origin == data_origin)
             if session_id is not None:
                 q = q.where(Test.session_id == session_id)
             tests = list(s.scalars(q).all())

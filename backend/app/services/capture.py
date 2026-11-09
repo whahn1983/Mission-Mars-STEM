@@ -154,9 +154,10 @@ class CaptureService:
         if not cfg["enabled"]:
             raise CaptureError(f"Configuration {cfg['code']} is not available at this station.")
         if not self.manager.connected:
+            detail = (self.manager.last_error or "").strip().rstrip(".")
             raise CaptureError(
-                f"Sensor is not connected ({self.manager.state.value}). "
-                + (self.manager.last_error or "")
+                f"Sensor is not connected ({self.manager.state.value})."
+                + (f" {detail}." if detail else "")
                 + " The operator can switch to simulation mode."
             )
         snap = self.manager.snapshot()
