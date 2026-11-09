@@ -1,0 +1,51 @@
+# Mission Mars — Lander Engineering Laboratory
+#
+#   docker compose up -d --build      # first time / after updates (needs internet)
+#   docker compose up -d              # at the event (works offline)
+#   docker compose down               # stop (data is kept in the volume)
+#
+# Settings come from .env (copy .env.example to .env).
+
+name: mission-mars
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: mission-mars:latest
+    container_name: mission-mars
+    restart: unless-stopped
+    # Standard bridge networking. The backend reaches the sensor on the LAN by
+    # its IP address through Docker Desktop's NAT; no host networking or
+    # privileged mode is needed.
+    ports:
+      # Bound to localhost by default (operator laptop only). Set APP_BIND=0.0.0.0
+      # in .env to allow a second screen/tablet on the network to connect.
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8000"
+    environment:
+      DATA_DIR: /data
+      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/mars_lander.db}
+      SENSOR_MODE: ${SENSOR_MODE:-simulation}
+      EVB_HOST: ${EVB_HOST:-}
+      EVB_PORT: ${EVB_PORT:-80}
+      EVB_TIMEOUT_SECONDS: ${EVB_TIMEOUT_SECONDS:-5}
+      EVB_ACCEL_RANGE_G: ${EVB_ACCEL_RANGE_G:-16}
+      EVB_PROFILE_PATH: ${EVB_PROFILE_PATH:-/app/config/evb_profile.json}
+      OPERATOR_PIN: ${OPERATOR_PIN:-1113}
+      SIM_SAMPLE_RATE_HZ: ${SIM_SAMPLE_RATE_HZ:-1600}
+      SIM_SEED: ${SIM_SEED:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - mission-data:/data
+      # Edit config/evb_profile.json on the laptop, then press
+      # "Reload EVB profile" in the operator dashboard.
+      - ./config:/app/config:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  mission-data:

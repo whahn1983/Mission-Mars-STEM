@@ -30,7 +30,9 @@ export function LiveTest() {
   const go = useStore((s) => s.go);
   const [busy, setBusy] = useState(false);
   const prevState = useRef(capture?.state);
-  const armedHere = useRef(false);
+  // True when this screen started (or, after a browser refresh, resumed) the
+  // test in progress, so it should jump to the results when it completes.
+  const armedHere = useRef(["baseline", "armed", "triggered", "analyzing"].includes(capture?.state ?? ""));
 
   const cfg = configs.find((c) => c.id === configurationId) ?? null;
   const sim = sensor?.mode === "simulation";

@@ -354,7 +354,19 @@ function GearRow({ c, onSaved }: { c: Configuration; onSaved: () => void }) {
   const [massG, setMassG] = useState(String(Math.round(c.mass_kg * 1000)));
   const [color, setColor] = useState(c.display_color);
   const [desc, setDesc] = useState(c.description);
+  const [paramsText, setParamsText] = useState(JSON.stringify(c.parameters_json, null, 2));
+  const [showParams, setShowParams] = useState(false);
+  const notify = useStore((s) => s.notify);
   const save = (changes: Partial<Configuration>, msg = "Saved") => run(() => api.updateConfiguration(c.id, changes), msg).then(onSaved);
+  const saveParams = () => {
+    try {
+      const parsed = JSON.parse(paramsText);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("must be an object");
+      save({ parameters_json: parsed }, "Parameters saved");
+    } catch (e) {
+      notify("error", `Invalid JSON: ${(e as Error).message}`);
+    }
+  };
   return (
     <div className={`rounded-2xl border p-4 ${c.enabled ? "border-telemetry/30" : "border-space-600 opacity-70"}`}>
       <div className="mb-3 flex items-center justify-between gap-3">
@@ -413,7 +425,21 @@ function GearRow({ c, onSaved }: { c: Configuration; onSaved: () => void }) {
             </Button>
           </>
         )}
+        <Button size="sm" variant="ghost" onClick={() => setShowParams((v) => !v)}>
+          {showParams ? "Hide" : "Advanced:"} 3D &amp; simulation parameters
+        </Button>
       </div>
+      {showParams && (
+        <div className="mt-3">
+          <p className="mb-1 text-xs text-slate-500">
+            <code>geometry</code> controls the 3D drawing, <code>sim</code> the simulator (see docs/simulation-model.md), <code>traits</code> the 1–5 ratings.
+          </p>
+          <textarea className={`${inputCls} font-mono text-xs`} rows={14} value={paramsText} onChange={(e) => setParamsText(e.target.value)} spellCheck={false} />
+          <Button size="sm" className="mt-2" disabled={busy} onClick={saveParams}>
+            Save parameters
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

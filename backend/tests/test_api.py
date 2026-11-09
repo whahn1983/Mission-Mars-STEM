@@ -149,3 +149,13 @@ def test_websocket_streams_live_telemetry(client):
                 break
         assert got and got["data_origin"] == "simulated"
         assert len(got["points"][0]) == 5
+
+
+def test_invalid_simulation_parameters_are_rejected(client):
+    cfg = client.get("/api/configurations").json()[0]
+    bad = dict(cfg["parameters_json"]); bad["sim"] = {**bad["sim"], "stiffness_n_m": 0}
+    r = client.patch(f"/api/configurations/{cfg['id']}", json={"parameters_json": bad}, headers=PIN)
+    assert r.status_code == 400
+    good = dict(cfg["parameters_json"]); good["sim"] = {**good["sim"], "stiffness_n_m": 1700}
+    r = client.patch(f"/api/configurations/{cfg['id']}", json={"parameters_json": good}, headers=PIN)
+    assert r.status_code == 200 and r.json()["parameters_json"]["sim"]["stiffness_n_m"] == 1700

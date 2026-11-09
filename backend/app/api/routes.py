@@ -96,8 +96,34 @@ def list_configurations(enabled_only: bool = False, rt: Runtime = Depends(get_ru
     return rt.repo.list_configurations(enabled_only=enabled_only)
 
 
+def _validate_parameters(p: dict) -> None:
+    sim = p.get("sim")
+    if sim is None:
+        return
+    if not isinstance(sim, dict):
+        raise HTTPException(400, "parameters_json.sim must be an object")
+
+    def num(key, *, minimum=0.0, allow_none=False, strict=False):
+        v = sim.get(key)
+        if v is None:
+            if allow_none:
+                return
+            raise HTTPException(400, f"sim.{key} is required")
+        if not isinstance(v, (int, float)) or isinstance(v, bool) or (v <= minimum if strict else v < minimum):
+            raise HTTPException(400, f"sim.{key} must be a number {'>' if strict else '≥'} {minimum}")
+
+    num("stiffness_n_m", strict=True)
+    num("damping_ratio")
+    num("crush_force_n", allow_none=True, strict=True)
+    for k in ("crush_stroke_m", "lateral_coupling", "ringing_hz", "ringing_g_per_g", "variation"):
+        if k in sim:
+            num(k, allow_none=True)
+
+
 @router.patch("/configurations/{config_id}", dependencies=operator)
 def update_configuration(config_id: int, body: ConfigUpdate, rt: Runtime = Depends(get_runtime)) -> dict:
+    if body.parameters_json is not None:
+        _validate_parameters(body.parameters_json)
     res = rt.repo.update_configuration(config_id, body.model_dump(exclude_none=True))
     if res is None:
         raise HTTPException(404, "Configuration not found")

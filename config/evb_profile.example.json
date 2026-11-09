@@ -1,0 +1,68 @@
+{
+  "_readme": [
+    "EVB Lite protocol profile TEMPLATE. Nothing in this file is verified.",
+    "Copy to config/evb_profile.json and fill in ONLY behavior you have observed on the",
+    "physical EVB Lite or confirmed in EVident documentation. Leave unknown values null.",
+    "Then set verified=true, fill verified_by / verified_on / source_of_truth, and press",
+    "'Reload EVB profile' in the operator dashboard. See docs/evb-lite-integration.md."
+  ],
+  "verified": false,
+  "verified_by": "",
+  "verified_on": "",
+  "source_of_truth": "",
+
+  "device": {
+    "model": "",
+    "firmware_version": ""
+  },
+
+  "http": {
+    "scheme": "http",
+    "headers": {}
+  },
+
+  "status": {
+    "_comment": "Optional GET path that returns device status as JSON, plus dotted paths to fields in it.",
+    "path": null,
+    "fields": {
+      "firmware_version": null,
+      "battery_percent": null,
+      "device_id": null,
+      "model": null
+    }
+  },
+
+  "capture": {
+    "_comment": "Optional documented requests to start/stop streaming or recording. Non-GET requests REQUIRE documented_in.",
+    "start": null,
+    "stop": null
+  },
+
+  "samples": {
+    "_comment": "GET path that returns recent samples. Polled every poll_interval_ms.",
+    "path": null,
+    "method": "GET",
+    "query": {},
+    "format": "json",
+    "poll_interval_ms": 50,
+    "json": {
+      "_comment": "list_path: dotted path to the sample list ('' = root). layout: objects | arrays | columns.",
+      "list_path": "",
+      "layout": "objects",
+      "fields": { "timestamp": null, "ax": null, "ay": null, "az": null }
+    },
+    "csv": {
+      "columns": { "timestamp": null, "ax": null, "ay": null, "az": null }
+    },
+    "timestamp_unit": "ms",
+    "timestamp_wrap_bits": null,
+    "accel_unit": "g",
+    "incremental": { "query_param": null }
+  },
+
+  "_axis_map_comment": "Map lander axes to sensor axes so +z points UP when the lander rests upright, e.g. {\"z\": \"-y\"}.",
+  "axis_map": { "x": "+x", "y": "+y", "z": "+z" },
+
+  "accel_range_g": 16,
+  "nominal_sample_rate_hz": null
+}
