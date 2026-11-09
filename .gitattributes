@@ -1,0 +1,7 @@
+# Keep LF line endings in the repository so Docker builds behave the same
+# when the project is cloned on Windows.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.woff binary
+*.woff2 binary

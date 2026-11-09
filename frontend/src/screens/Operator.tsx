@@ -62,6 +62,10 @@ function StationTab({ settings, reload }: { settings: Record<string, unknown>; r
   const { busy, run } = useAction();
   const capture = useStore((s) => s.capture);
   const openOperator = useStore((s) => s.openOperator);
+  const configurationId = useStore((s) => s.configurationId);
+  const gradeBand = useStore((s) => s.gradeBand);
+  const prediction = useStore((s) => s.prediction);
+  const mission = { configurationId, gradeBand, prediction };
   const [heightCm, setHeightCm] = useState(String(Math.round(Number(settings.drop_height_m) * 100)));
   const [options, setOptions] = useState(((settings.drop_height_options_m as number[]) ?? []).map((h) => Math.round(h * 100)).join(", "));
   const save = (changes: Record<string, unknown>, msg = "Saved") => run(() => api.updateSettings(changes), msg).then(reload);
@@ -83,12 +87,25 @@ function StationTab({ settings, reload }: { settings: Record<string, unknown>; r
           <div className="text-sm text-slate-400">
             Capture state: <b className="text-slate-200">{capture?.state}</b> — {capture?.message}
           </div>
-          <div className="grid grid-cols-3 gap-2">
-            <Button variant="ghost" disabled={busy} onClick={() => run(() => api.trigger(), "Manual capture started")}>
-              Start capture
+          <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <Button
+              variant="ghost"
+              disabled={busy || !mission.configurationId}
+              title="Arm using the landing gear and prediction currently chosen on the student screen"
+              onClick={() =>
+                run(
+                  () => api.arm({ configuration_id: mission.configurationId!, grade_band: mission.gradeBand, prediction: mission.prediction }),
+                  "Armed",
+                )
+              }
+            >
+              Arm test
+            </Button>
+            <Button variant="ghost" disabled={busy} title="Start the post-trigger recording window now" onClick={() => run(() => api.trigger(), "Manual capture started")}>
+              Capture now
             </Button>
             <Button variant="ghost" disabled={busy} onClick={() => run(() => api.stop(), "Capture stopped")}>
-              Stop capture
+              Stop &amp; analyze
             </Button>
             <Button variant="danger" disabled={busy} onClick={() => run(() => api.cancel(), "Current test cleared")}>
               Clear current test
@@ -589,8 +606,8 @@ function DataTab() {
                 <th>Origin</th>
                 <th>Gear</th>
                 <th>Height</th>
-                <th className="text-right">Peak</th>
-                <th>Status</th>
+                <th className="pr-3 text-right">Peak</th>
+                <th className="pl-1">Status</th>
                 <th></th>
               </tr>
             </thead>
@@ -607,8 +624,8 @@ function DataTab() {
                     {t.configuration_code} {t.configuration_name}
                   </td>
                   <td>{fmtHeight(t.drop_height_m)}</td>
-                  <td className="text-right font-mono">{t.measured_peak_g != null ? fmtG(t.measured_peak_g, 2) : t.saturated ? `>${fmtG(t.observed_max_g, 1)}` : "—"}</td>
-                  <td>
+                  <td className="pr-3 text-right font-mono">{t.measured_peak_g != null ? fmtG(t.measured_peak_g, 2) : t.saturated ? `>${fmtG(t.observed_max_g, 1)}` : "—"}</td>
+                  <td className="pl-1">
                     {t.saturated ? <Badge tone="alert">over range</Badge> : t.valid ? <Badge tone="go">valid</Badge> : <Badge tone="muted">invalid</Badge>}
                     {t.excluded && <Badge tone="caution">excluded</Badge>}
                   </td>
