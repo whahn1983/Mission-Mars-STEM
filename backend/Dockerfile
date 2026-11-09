@@ -36,6 +36,8 @@ COPY backend/migrations ./migrations
 COPY backend/alembic.ini ./alembic.ini
 COPY config/ ./config/
 COPY --from=frontend /build/dist ./static
+# Default location of the verified EVB Lite profile (./config is mounted here).
+ENV EVB_PROFILE_PATH=/app/config/evb_profile.json
 
 # Run as an unprivileged user. /data is the persistent volume.
 RUN useradd --system --uid 1000 --create-home mission \

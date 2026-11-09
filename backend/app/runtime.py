@@ -64,6 +64,8 @@ class Runtime:
     async def startup(self, *, configure_logs: bool = True) -> None:
         if configure_logs:
             configure_logging(self.env, self.logbuf)
+        for w in self.env.config_warnings:
+            log.warning("Configuration: %s", w)
         for d in (self.env.data_dir, self.photos_dir, self.discovery_dir):
             try:
                 d.mkdir(parents=True, exist_ok=True)

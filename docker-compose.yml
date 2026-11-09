@@ -23,19 +23,18 @@ services:
       # Bound to localhost by default (operator laptop only). Set APP_BIND=0.0.0.0
       # in .env to allow a second screen/tablet on the network to connect.
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8000"
+    # App settings come from .env via env_file, so variables that happen to be
+    # set in the Windows environment for other projects (DATABASE_URL,
+    # LOG_LEVEL, ...) are NOT picked up. Without a .env file the built-in
+    # defaults (same as .env.example) apply.
+    env_file:
+      - path: .env
+        required: false
     environment:
+      # Fixed container-internal paths; these override anything in .env. Data
+      # lives in the mission-data volume below.
       DATA_DIR: /data
-      DATABASE_URL: ${DATABASE_URL:-sqlite:////data/mars_lander.db}
-      SENSOR_MODE: ${SENSOR_MODE:-simulation}
-      EVB_HOST: ${EVB_HOST:-}
-      EVB_PORT: ${EVB_PORT:-80}
-      EVB_TIMEOUT_SECONDS: ${EVB_TIMEOUT_SECONDS:-5}
-      EVB_ACCEL_RANGE_G: ${EVB_ACCEL_RANGE_G:-16}
-      EVB_PROFILE_PATH: ${EVB_PROFILE_PATH:-/app/config/evb_profile.json}
-      OPERATOR_PIN: ${OPERATOR_PIN:-1113}
-      SIM_SAMPLE_RATE_HZ: ${SIM_SAMPLE_RATE_HZ:-1600}
-      SIM_SEED: ${SIM_SEED:-}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: sqlite:////data/mars_lander.db
     volumes:
       - mission-data:/data
       # Edit config/evb_profile.json on the laptop, then press

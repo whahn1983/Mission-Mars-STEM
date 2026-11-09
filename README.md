@@ -114,11 +114,12 @@ The full event-night runbook is in [`docs/operator-guide.md`](docs/operator-guid
 | `EVB_TIMEOUT_SECONDS` | `5` | Per-request timeout |
 | `EVB_ACCEL_RANGE_G` | `16` | Per-axis full scale used for saturation detection |
 | `EVB_PROFILE_PATH` | `/app/config/evb_profile.json` | Verified protocol profile (`./config` is mounted read-only) |
-| `DATABASE_URL` | `sqlite:////data/mars_lander.db` | SQLite file in the data volume |
 | `OPERATOR_PIN` | `1113` | Operator dashboard PIN; empty disables it (only with `APP_BIND=127.0.0.1`) |
 | `SIM_SAMPLE_RATE_HZ` | `1600` | Simulator sample rate |
 | `SIM_SEED` | *(empty)* | Fixed seed for reproducible simulated drops |
 | `LOG_LEVEL` | `INFO` | |
+
+Test data always lives in the `mission-data` Docker volume (`/data/mars_lander.db` inside the container). Its location is fixed in `docker-compose.yml` and is not configurable through `.env`. Do **not** set `DATABASE_URL` to a Windows path: the container cannot see your C: drive. If you do, the app ignores it, falls back to the volume, and logs a warning.
 
 `.env` values are **start-up defaults**. Changes made in the operator dashboard are saved in the database and win. **Operator → Analysis → Restore defaults from .env** re-applies `.env`. After editing `.env`, run `docker compose up -d` to apply it.
 
@@ -153,6 +154,8 @@ docker compose exec app python -c "import urllib.request as u; print(u.urlopen('
 If `ping` from Windows works but this fails, restart Docker Desktop. On corporate laptops, VPN clients sometimes capture LAN routes; disconnect the VPN.
 
 **Sensor reconnects:** the app retries automatically with exponential backoff (1 s up to 30 s) and shows *last contact* and *next retry*. **Connect / retry now** forces an attempt. During a test, a disconnect ends the test with a clear message and never produces fake readings. **Switch to simulation now** is always one click away.
+
+**Container keeps restarting with `PermissionError ... 'C:'` in the log:** an old copy of the project passed a Windows `DATABASE_URL` into the container. Update to the latest version (`git pull`, then `docker compose up -d --build`). Also remove any `DATABASE_URL` line from `.env`, and check that no `DATABASE_URL` is set in your Windows environment variables (`echo $env:DATABASE_URL` in PowerShell).
 
 **Port 8080 already in use:** set `APP_PORT=8081` in `.env` and run `docker compose up -d`.
 
