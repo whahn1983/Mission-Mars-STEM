@@ -23,7 +23,7 @@ export function rangeOptions(ranges: [number, number][]): PredictionOption[] {
     payload: { kind: "range" as const, label: `${lo}–${hi} g`, low_g: lo, high_g: hi },
   }));
   const top = ranges.length ? ranges[ranges.length - 1][1] : 16;
-  opts.push({ key: `${top}+`, label: `${top}+ g`, sub: "over range?", payload: { kind: "range", label: `${top}+ g`, low_g: top, high_g: null } });
+  opts.push({ key: `${top}+`, label: `${top}+ g`, sub: "", payload: { kind: "range", label: `${top}+ g`, low_g: top, high_g: null } });
   return opts;
 }
 

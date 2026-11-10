@@ -723,6 +723,8 @@ function AnalysisTab({ settings, reload }: { settings: Record<string, unknown>; 
   const save = (changes: Record<string, unknown>) => run(() => api.updateSettings(changes), "Saved").then(reload);
   const saveCriteria = (k: string, v: unknown) => save({ criteria: { ...criteria, [k]: v } });
   const saveDetector = (k: string, v: unknown) => save({ detector: { ...detector, [k]: v } });
+  const quality = (settings.quality ?? {}) as Record<string, unknown>;
+  const saveQuality = (k: string, v: unknown) => save({ quality: { ...quality, [k]: v } });
 
   return (
     <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -758,6 +760,16 @@ function AnalysisTab({ settings, reload }: { settings: Record<string, unknown>; 
         </div>
         <div className="mt-3">
           <Toggle checked={!!(detector as Record<string, unknown>).require_freefall} onChange={(v) => saveDetector("require_freefall", v)} label="Require a free-fall phase before a valid impact" />
+        </div>
+        <div className="mt-2">
+          <Toggle
+            checked={!!quality.saturation_invalidates}
+            onChange={(v) => saveQuality("saturation_invalidates", v)}
+            label="Over-range makes a test invalid (an axis at the sensor's ±16 g limit)"
+          />
+          <p className="mt-1 text-xs text-slate-500">
+            Off: the measured peak is reported and ranked, with a note that it may be a little low. On: such tests show no peak and are not ranked.
+          </p>
         </div>
       </Panel>
       <Panel title="Grades 5–8 prediction ranges">

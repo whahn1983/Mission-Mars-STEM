@@ -58,7 +58,7 @@ The screen returns to the briefing automatically after 2 minutes of inactivity (
 | "Gravity Compensation is ON" when arming | Sensor portal → Sensor Settings → disable Gravity Compensation, then ARM again |
 | Live graph stays empty on the Live Test screen | Operator → Sensor → *Live view* shows why. Tests still work without it: the full graph is in the report. Close other browser tabs that show the sensor portal's live stream |
 | A download error, or a note *"the sensor's saved file was downloaded instead"* | The sensor broke the connection while sending the file; the app downloads the saved file instead. If a test still fails, `docker compose logs app` shows the exact request. The file is also on the sensor: portal → File Manager → Download, then Operator → Data & export → Import CSV |
-| Report says **≥ 19.6 g, OVER SENSOR RANGE** | An axis hit the sensor's ±16 g limit. The graph shows \|a\|, the three axes combined, which can read above 16 g; the real peak was at least the number shown. Lower the drop height or add cushioning |
+| Report notes *"an axis reached the sensor's ±16 g limit"* | Normal for hard landings. The peak shown (\|a\|, the three axes combined) can read above 16 g and is reported and ranked; the real peak may be a little higher. To treat such tests as invalid instead, turn on Operator → Analysis → *Over-range makes a test invalid* |
 | App not loading | `docker compose ps`; `docker compose restart`; see README troubleshooting |
 
 Refreshing the browser at any time is safe: the test in progress continues on the server, and saved data is never affected.

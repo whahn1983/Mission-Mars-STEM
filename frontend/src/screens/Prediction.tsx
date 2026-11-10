@@ -73,7 +73,7 @@ export function Prediction() {
   useEffect(() => {
     if (gradeBand !== "912") return;
     const v = parseFloat(num);
-    if (Number.isFinite(v) && v >= 0 && v <= 200) setPrediction(numberPrediction(Math.round(v * 10) / 10));
+    if (Number.isFinite(v) && v >= 0 && v < 1000) setPrediction(numberPrediction(Math.round(v * 10) / 10));
     else if (num === "") setPrediction(null);
   }, [num, gradeBand, setPrediction]);
 
@@ -128,14 +128,13 @@ export function Prediction() {
             <input
               type="range"
               min={0}
-              max={20}
+              max={Math.max(30, Math.ceil(Number(num) || 0))}
               step={0.5}
               value={Number(num) || 0}
               onChange={(e) => setNum(e.target.value)}
               className="w-72 accent-cyan-400"
               aria-label="Prediction slider"
             />
-            <div className="text-sm text-slate-400">Sensor range is ±16 g per axis.</div>
           </div>
           <Keypad value={num} onChange={setNum} />
         </Panel>

@@ -21,13 +21,17 @@ class QualityConfig:
     warn_completeness: float = 0.95
     impact_gap_margin_ms: float = 20.0
     saturation_margin_fraction: float = 0.02
+    # False (default): an axis at the sensor limit is a warning and the
+    # measured |a| peak is reported. True: such a test is invalid, with no peak.
+    saturation_invalidates: bool = False
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "QualityConfig":
         cfg = cls()
         for k, v in (d or {}).items():
             if hasattr(cfg, k) and v is not None:
-                setattr(cfg, k, float(v))
+                cur = getattr(cfg, k)
+                setattr(cfg, k, bool(v) if isinstance(cur, bool) else float(v))
         return cfg
 
     def to_dict(self) -> dict:
@@ -174,14 +178,25 @@ def analyze_capture(
     sat = detect_saturation(ax, ay, az, range_g=range_g, margin_fraction=q.saturation_margin_fraction)
     if sat.saturated:
         axes = ", ".join(f"{k.upper()}×{v}" for k, v in sat.per_axis_counts.items() if v)
-        flags.append(
-            Flag(
-                "SATURATED",
-                "error",
-                f"Sensor over-range: readings reached the ±{range_g:g} g limit ({axes} samples). "
-                "The true peak may be higher. Try a lower drop height or more cushioning.",
+        if q.saturation_invalidates:
+            flags.append(
+                Flag(
+                    "SATURATED",
+                    "error",
+                    f"Sensor over-range: readings reached the ±{range_g:g} g limit ({axes} samples). "
+                    "The true peak may be higher. Try a lower drop height or more cushioning.",
+                )
             )
-        )
+        else:
+            flags.append(
+                Flag(
+                    "SATURATED",
+                    "warning",
+                    f"An axis reached the sensor's ±{range_g:g} g limit ({axes} samples). The peak shown combines "
+                    "all three axes, so it can be above that limit; because the axis was cut off, the real peak "
+                    "may be a little higher.",
+                )
+            )
 
     # --- Impact-dependent checks -------------------------------------------------
     if not detection.impact_detected:

@@ -202,9 +202,9 @@ def end_session(session_id: int, rt: Runtime = Depends(get_runtime)) -> dict:
 class Prediction(BaseModel):
     kind: Literal["category", "range", "number"]
     label: str | None = Field(default=None, max_length=40)
-    value_g: float | None = Field(default=None, ge=0, le=500)
-    low_g: float | None = Field(default=None, ge=0, le=500)
-    high_g: float | None = Field(default=None, ge=0, le=500)
+    value_g: float | None = Field(default=None, ge=0, le=1000)
+    low_g: float | None = Field(default=None, ge=0, le=1000)
+    high_g: float | None = Field(default=None, ge=0, le=1000)
 
 
 class ArmRequest(BaseModel):
