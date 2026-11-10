@@ -3,6 +3,8 @@
 export type DataOrigin = "physical" | "simulated" | "unverified";
 export type SensorMode = "simulation" | "evb_lite" | "csv_replay";
 export type GradeBand = "k4" | "58" | "912";
+/** "record": the sensor records a fixed window per test and delivers it when done (no live preview). */
+export type CaptureMode = "stream" | "record";
 export type CaptureStateName =
   | "idle"
   | "baseline"
@@ -28,6 +30,9 @@ export interface ProfileSummary {
   axis_map: Record<string, string>;
   has_start_request: boolean;
   has_stop_request: boolean;
+  capture_mode?: CaptureMode;
+  record_path?: string | null;
+  record_timeout_s?: number | null;
   streaming_ready: boolean;
   loaded_from: string | null;
   problems: string[];
@@ -57,6 +62,8 @@ export interface SensorSnapshot {
   consecutive_failures: number;
   next_retry_in_s: number | null;
   samples_received: number;
+  capture_mode?: CaptureMode;
+  record_progress?: number | null;
   battery_percent: number | null;
   detail: Record<string, unknown>;
   streaming_available: boolean;
@@ -85,6 +92,8 @@ export interface CaptureSnapshot {
   trigger_reason: string | null;
   live_peak_g: number | null;
   baseline: { magnitude_g: number; noise_std_g: number; stationary: boolean } | null;
+  capture_mode?: CaptureMode;
+  record_progress?: number | null;
   mission: {
     configuration_id: number;
     configuration_code: string;

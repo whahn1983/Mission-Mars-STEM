@@ -361,7 +361,7 @@ async def import_csv(
     drop_height_m: float | None = Form(default=None),
     data_origin: Literal["physical", "simulated", "unverified"] = Form(default="unverified"),
     time_unit: Literal["s", "ms", "us", "ns"] | None = Form(default=None),
-    accel_unit: Literal["g", "mg", "m/s2"] = Form(default="g"),
+    accel_unit: Literal["g", "mg", "m/s2"] | None = Form(default=None),
     range_g: float = Form(default=16.0),
     notes: str | None = Form(default=None),
     rt: Runtime = Depends(get_runtime),
@@ -395,7 +395,7 @@ async def import_csv(
         analysis["import"] = {
             "filename": file.filename, "time_column": parsed.time_column, "time_unit": parsed.time_unit,
             "accel_unit": parsed.accel_unit, "columns": parsed.columns, "rows": parsed.row_count,
-            "missing_timestamp_rows": parsed.missing_timestamp_rows,
+            "missing_timestamp_rows": parsed.missing_timestamp_rows, "detected_format": parsed.detected_format,
         }
         return rt.repo.save_test(
             source="csv_import", data_origin=data_origin, configuration=cfg, drop_height_m=drop_height_m,
@@ -523,7 +523,7 @@ async def sensor_replay_upload(
     data_origin: Literal["physical", "simulated", "unverified"] = Form(default="unverified"),
     loop: bool = Form(default=False),
     time_unit: Literal["s", "ms", "us", "ns"] | None = Form(default=None),
-    accel_unit: Literal["g", "mg", "m/s2"] = Form(default="g"),
+    accel_unit: Literal["g", "mg", "m/s2"] | None = Form(default=None),
     activate: bool = Form(default=True),
     rt: Runtime = Depends(get_runtime),
 ) -> dict:

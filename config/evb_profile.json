@@ -1,0 +1,70 @@
+{
+  "_readme": [
+    "EVB Lite protocol profile, filled in from the physical sensor EVBS_V1F9L on 2026-11-10.",
+    "Record mode: ARM TEST sends the portal's own Record request; the sensor records for the",
+    "time set in its portal (Sensor Settings) and returns the whole recording as CSV.",
+    "Evidence: docs/evb-lite-evidence/. Integration notes: docs/evb-lite-integration.md."
+  ],
+  "verified": true,
+  "verified_by": "Operator capture of sensor EVBS_V1F9L (HAR + recording), profile written with Claude Code",
+  "verified_on": "2026-11-10",
+  "source_of_truth": "Sensor portal traffic docs/evb-lite-evidence/portal-record-2026-11-10.har and recording docs/evb-lite-evidence/EVBS_V1F9L_2026-11-10_16-58-48_90.csv; EVident Vibration Sensor User Manual §6.3",
+
+  "device": {
+    "model": "EVB Lite (EVident Vibration Sensor)",
+    "firmware_version": ""
+  },
+
+  "http": {
+    "scheme": "http",
+    "headers": {}
+  },
+
+  "status": {
+    "path": null,
+    "fields": {}
+  },
+
+  "capture": {
+    "mode": "record",
+    "start": null,
+    "stop": null,
+    "record": {
+      "_comment": "GET /start?format=csv redirects to port 8000, records for the portal's configured time, then returns the CSV. /progress returns {\"progress\": 0-100} while recording and HTTP 400 when idle.",
+      "method": "GET",
+      "path": "/start",
+      "query": { "format": "csv" },
+      "documented_in": "EVident Vibration Sensor User Manual §6.3 (Record); request observed in the sensor portal's own traffic, docs/evb-lite-evidence/portal-record-2026-11-10.har",
+      "timeout_s": 120,
+      "progress_path": "/progress",
+      "progress_field": "progress"
+    }
+  },
+
+  "samples": {
+    "_comment": "Format of the recording. Timestamp = microseconds since the recording started (570 us steps observed); Accel_* = m/s2 (resting magnitude 9.67 m/s2).",
+    "path": null,
+    "method": "GET",
+    "query": {},
+    "format": "csv",
+    "poll_interval_ms": 50,
+    "json": {
+      "list_path": "",
+      "layout": "objects",
+      "fields": { "timestamp": null, "ax": null, "ay": null, "az": null }
+    },
+    "csv": {
+      "columns": { "timestamp": "Timestamp", "ax": "Accel_X", "ay": "Accel_Y", "az": "Accel_Z" }
+    },
+    "timestamp_unit": "us",
+    "timestamp_wrap_bits": null,
+    "accel_unit": "m/s2",
+    "incremental": { "query_param": null }
+  },
+
+  "_axis_map_comment": "Lying flat label up, the sensor reads Z = -9.66 m/s2, so z is inverted to make +z read +1 g at rest. Assumes the sensor is mounted label up in the lander; X/Y signs are not yet checked (six-face test, docs/evb-lite-integration.md §7).",
+  "axis_map": { "x": "+x", "y": "+y", "z": "-z" },
+
+  "accel_range_g": 16,
+  "nominal_sample_rate_hz": null
+}

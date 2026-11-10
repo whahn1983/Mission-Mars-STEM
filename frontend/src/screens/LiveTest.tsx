@@ -41,6 +41,10 @@ export function LiveTest() {
   const canStudentHeight = sim && settings?.allow_student_height_change;
   const height = active && capture?.mission ? capture.mission.drop_height_m : (canStudentHeight && dropHeight) || settings?.drop_height_m || 0.2;
   const sensorReady = !!sensor?.connected && sensor.streaming_available !== false;
+  // Record mode (EVB Lite): the sensor records a fixed window per test and
+  // sends it when done, so there is no live graph and no CAPTURE/STOP.
+  const record = !sim && sensor?.capture_mode === "record";
+  const progress = capture?.record_progress ?? null;
 
   useEffect(() => {
     setPreview(true);
@@ -137,7 +141,11 @@ export function LiveTest() {
             ) : null}
           </div>
           <div className="min-h-[220px] flex-1">
-            <LiveChart rangeG={range} simulated={sim} />
+            <LiveChart
+              rangeG={range}
+              simulated={sim}
+              emptyText={record ? "The sensor records each drop. The graph appears when the recording has downloaded." : undefined}
+            />
           </div>
         </div>
       </div>
@@ -184,7 +192,7 @@ export function LiveTest() {
           {state === "baseline" && (
             <div className="flex flex-col items-center gap-2 py-4 text-center text-slate-300">
               <div className="h-10 w-10 animate-spin rounded-full border-4 border-telemetry/30 border-t-telemetry" />
-              Measuring the resting baseline. Keep the lander still.
+              {record ? "Starting the sensor recording. Keep the lander still." : "Measuring the resting baseline. Keep the lander still."}
             </div>
           )}
 
@@ -198,6 +206,17 @@ export function LiveTest() {
               RELEASE THE LANDER!
             </div>
           )}
+          {state === "armed" && record && progress !== null && (
+            <div className="mt-3" aria-label={`Recording ${Math.round(progress)} percent`}>
+              <div className="mb-1 flex justify-between text-xs uppercase tracking-widest text-slate-400">
+                <span>Sensor recording</span>
+                <span className="font-mono">{Math.round(progress)}%</span>
+              </div>
+              <div className="h-3 overflow-hidden rounded-full bg-space-700">
+                <div className="h-full rounded-full bg-mars transition-[width] duration-300" style={{ width: `${Math.min(100, progress)}%` }} />
+              </div>
+            </div>
+          )}
           {state === "triggered" && <div className="rounded-2xl bg-mars/20 p-5 text-center font-display text-3xl font-black text-mars">IMPACT!</div>}
           {state === "analyzing" && (
             <div className="flex flex-col items-center gap-2 py-4 text-slate-300">
@@ -207,10 +226,10 @@ export function LiveTest() {
           )}
 
           <div className="mt-4 grid grid-cols-3 gap-2">
-            <Button variant="ghost" size="md" disabled={!["baseline", "armed"].includes(state) || busy} onClick={() => call(() => api.trigger())} title="Record the next window manually">
+            <Button variant="ghost" size="md" disabled={record || !["baseline", "armed"].includes(state) || busy} onClick={() => call(() => api.trigger())} title={record ? "Not available: the sensor records a fixed window" : "Record the next window manually"}>
               Capture
             </Button>
-            <Button variant="ghost" size="md" disabled={!["baseline", "armed", "triggered"].includes(state) || busy} onClick={() => call(() => api.stop())} title="Stop and analyze what was recorded">
+            <Button variant="ghost" size="md" disabled={record || !["baseline", "armed", "triggered"].includes(state) || busy} onClick={() => call(() => api.stop())} title={record ? "Not available: the test ends when the recording finishes" : "Stop and analyze what was recorded"}>
               Stop
             </Button>
             <Button variant="ghost" size="md" disabled={!active || state === "analyzing" || busy} onClick={() => call(() => api.cancel())}>
@@ -223,7 +242,12 @@ export function LiveTest() {
             </Button>
           )}
           <p className="mt-3 text-xs text-slate-500">
-            {sim ? "Space = arm / release." : "Space = arm. The operator releases the lander; the impact is detected automatically."} Esc = cancel.
+            {sim
+              ? "Space = arm / release."
+              : record
+                ? "Space = arm. The sensor records for the time set in its portal: release the lander when the screen says RELEASE."
+                : "Space = arm. The operator releases the lander; the impact is detected automatically."}{" "}
+            Esc = cancel.
           </p>
         </Panel>
 

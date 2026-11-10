@@ -271,7 +271,11 @@ function SensorTab() {
           <div className="mt-3 rounded-xl border border-space-600 p-3 text-sm">
             <div className="mb-1 flex items-center gap-2">
               Protocol profile {sensor.profile.verified ? <Badge tone="go">verified</Badge> : <Badge tone="caution">not verified</Badge>}
-              {sensor.profile.streaming_ready ? <Badge tone="go">live capture ready</Badge> : <Badge tone="muted">reachability only</Badge>}
+              {sensor.profile.streaming_ready ? (
+                <Badge tone="go">{sensor.profile.capture_mode === "record" ? "record mode ready" : "live capture ready"}</Badge>
+              ) : (
+                <Badge tone="muted">reachability only</Badge>
+              )}
             </div>
             <div className="text-slate-400">
               {sensor.profile.verified
@@ -485,7 +489,7 @@ function DataTab() {
   const [tests, setTests] = useState<TestSummary[]>([]);
   const [sessionName, setSessionName] = useState("");
   const [filter, setFilter] = useState<number | "">("");
-  const [imp, setImp] = useState({ configuration_id: "", drop_height_cm: "20", data_origin: "unverified", time_unit: "", accel_unit: "g" });
+  const [imp, setImp] = useState({ configuration_id: "", drop_height_cm: "20", data_origin: "unverified", time_unit: "", accel_unit: "" });
 
   const load = useCallback(() => {
     api.sessions().then(setSessions).catch(() => undefined);
@@ -553,10 +557,19 @@ function DataTab() {
             </Field>
             <Field label="Time unit (if column is 'time')">
               <select className={inputCls} value={imp.time_unit} onChange={(e) => setImp({ ...imp, time_unit: e.target.value })}>
-                <option value="">auto / seconds</option>
+                <option value="">auto (EVB Lite file: µs, otherwise s)</option>
+                <option value="s">s</option>
                 <option value="ms">ms</option>
                 <option value="us">µs</option>
                 <option value="ns">ns</option>
+              </select>
+            </Field>
+            <Field label="Acceleration unit">
+              <select className={inputCls} value={imp.accel_unit} onChange={(e) => setImp({ ...imp, accel_unit: e.target.value })}>
+                <option value="">auto (EVB Lite file: m/s², otherwise g)</option>
+                <option value="g">g</option>
+                <option value="mg">mg</option>
+                <option value="m/s2">m/s²</option>
               </select>
             </Field>
           </div>
@@ -575,7 +588,7 @@ function DataTab() {
                     drop_height_m: imp.drop_height_cm ? Number(imp.drop_height_cm) / 100 : undefined,
                     data_origin: imp.data_origin,
                     time_unit: imp.time_unit || undefined,
-                    accel_unit: imp.accel_unit,
+                    accel_unit: imp.accel_unit || undefined,
                   }),
                 "CSV imported",
               ).then(load);

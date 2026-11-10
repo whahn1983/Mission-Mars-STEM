@@ -6,8 +6,15 @@ file that the operator fills in *only* with behavior observed on the
 physical device or confirmed in manufacturer documentation (see
 docs/evb-lite-integration.md, "Phase 2").
 
-Until ``verified`` is true and ``samples.path`` is set, the adapter will only
-check reachability of the device's web portal and will refuse to stream.
+Two capture modes are supported:
+
+* ``stream`` (default): poll ``samples.path`` for recent samples.
+* ``record``: one documented GET (``capture.record``) makes the device record
+  a fixed window and returns the whole recording in its response body, which
+  is parsed with the ``samples`` format, column and unit settings.
+
+Until ``verified`` is true and the mode's data source is set, the adapter will
+only check reachability of the device's web portal and will refuse to capture.
 """
 
 from __future__ import annotations
@@ -19,6 +26,7 @@ from typing import Any
 
 ALLOWED_READ_METHODS = {"GET"}
 ALLOWED_CONTROL_METHODS = {"GET", "POST", "PUT"}
+CAPTURE_MODES = ("stream", "record")
 
 
 class ProfileError(ValueError):
@@ -32,6 +40,18 @@ class ControlRequest:
     documented_in: str
     json_body: Any = None
     query: dict = field(default_factory=dict)
+
+
+@dataclass
+class RecordSpec:
+    """A GET that records a fixed window on the device and returns it."""
+
+    path: str
+    documented_in: str
+    query: dict = field(default_factory=dict)
+    timeout_s: float = 120.0
+    progress_path: str | None = None
+    progress_field: str = "progress"
 
 
 @dataclass
@@ -63,6 +83,8 @@ class EVBProfile:
     status_fields: dict = field(default_factory=dict)
     start: ControlRequest | None = None
     stop: ControlRequest | None = None
+    capture_mode: str = "stream"
+    record: RecordSpec | None = None
     samples: SamplesSpec = field(default_factory=SamplesSpec)
     axis_map: dict = field(default_factory=lambda: {"x": "+x", "y": "+y", "z": "+z"})
     accel_range_g: float | None = None
@@ -72,7 +94,10 @@ class EVBProfile:
 
     @property
     def streaming_ready(self) -> bool:
-        return self.verified and bool(self.samples.path) and not self.problems and all(
+        """True when live capture can run (stream or record mode). The name is
+        kept for API compatibility."""
+        source = self.record is not None if self.capture_mode == "record" else bool(self.samples.path)
+        return self.verified and source and not self.problems and all(
             self.samples.fields.get(k) is not None for k in ("timestamp", "ax", "ay", "az")
         )
 
@@ -93,6 +118,9 @@ class EVBProfile:
             "axis_map": self.axis_map,
             "has_start_request": self.start is not None,
             "has_stop_request": self.stop is not None,
+            "capture_mode": self.capture_mode,
+            "record_path": self.record.path if self.record else None,
+            "record_timeout_s": self.record.timeout_s if self.record else None,
             "streaming_ready": self.streaming_ready,
             "loaded_from": self.loaded_from,
             "problems": self.problems,
@@ -118,6 +146,46 @@ def _control(d: dict | None, name: str, problems: list[str]) -> ControlRequest |
         )
         return None
     return ControlRequest(method=method, path=str(path), documented_in=doc, json_body=d.get("json"), query=dict(d.get("query") or {}))
+
+
+def _record(d: dict | None, problems: list[str]) -> RecordSpec | None:
+    if not d:
+        problems.append("capture.mode is 'record' but capture.record is missing")
+        return None
+    method = str(d.get("method", "GET")).upper()
+    path = d.get("path")
+    doc = str(d.get("documented_in") or "").strip()
+    progress = d.get("progress_path")
+    ok = True
+    if method != "GET":
+        problems.append("capture.record.method must be GET (its response is the recording)")
+        ok = False
+    if not path or not str(path).startswith("/"):
+        problems.append("capture.record.path must start with '/'")
+        ok = False
+    if not doc:
+        problems.append(
+            "capture.record starts a recording on the device and requires 'documented_in' "
+            "(manufacturer documentation or captured portal traffic)."
+        )
+        ok = False
+    if progress is not None and not str(progress).startswith("/"):
+        problems.append("capture.record.progress_path must start with '/'")
+        ok = False
+    try:
+        timeout = float(d.get("timeout_s") or 120.0)
+        if not 5.0 <= timeout <= 900.0:
+            raise ValueError
+    except (TypeError, ValueError):
+        problems.append("capture.record.timeout_s must be between 5 and 900 seconds")
+        ok = False
+        timeout = 120.0
+    if not ok:
+        return None
+    return RecordSpec(
+        path=str(path), documented_in=doc, query=dict(d.get("query") or {}), timeout_s=timeout,
+        progress_path=str(progress) if progress else None, progress_field=str(d.get("progress_field") or "progress"),
+    )
 
 
 def parse_profile(raw: dict, *, loaded_from: str | None = None) -> EVBProfile:
@@ -173,6 +241,14 @@ def parse_profile(raw: dict, *, loaded_from: str | None = None) -> EVBProfile:
     if sorted(str(axis_map.get(k, "+" + k))[1] for k in "xyz") != ["x", "y", "z"]:
         problems.append("axis_map must use each sensor axis exactly once")
 
+    capture_mode = str(capture.get("mode") or "stream").lower()
+    record: RecordSpec | None = None
+    if capture_mode not in CAPTURE_MODES:
+        problems.append(f"capture.mode must be one of {', '.join(CAPTURE_MODES)}, not {capture_mode}")
+        capture_mode = "stream"
+    elif capture_mode == "record":
+        record = _record(capture.get("record"), problems)
+
     verified = bool(raw.get("verified", False))
     if verified and not str(raw.get("source_of_truth") or "").strip():
         problems.append("verified profiles must record source_of_truth (where the behavior was confirmed)")
@@ -190,6 +266,8 @@ def parse_profile(raw: dict, *, loaded_from: str | None = None) -> EVBProfile:
         status_fields=dict(status.get("fields") or {}),
         start=_control(capture.get("start"), "capture.start", problems),
         stop=_control(capture.get("stop"), "capture.stop", problems),
+        capture_mode=capture_mode,
+        record=record,
         samples=samples,
         axis_map={k: str(axis_map.get(k, f"+{k}")) for k in "xyz"},
         accel_range_g=raw.get("accel_range_g"),
