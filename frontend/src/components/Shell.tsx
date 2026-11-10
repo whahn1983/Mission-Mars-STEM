@@ -22,7 +22,12 @@ export function SensorChip({ compact = false }: { compact?: boolean }) {
     error: { tone: "border-alert/50 bg-alert/10 text-red-200", dot: "bg-alert", label: "Error" },
     not_configured: { tone: "border-caution/40 bg-caution/10 text-amber-200", dot: "bg-caution", label: "Not configured" },
   };
-  const m = map[sensor.state] ?? map.disconnected;
+  // A device that answers but has no verified data link must not look ready
+  // (green "Connected"): live capture is impossible until the profile exists.
+  const noDataLink = sensor.connected && !sensor.streaming && sensor.streaming_available === false;
+  const m = noDataLink
+    ? { tone: map.not_configured.tone, dot: map.not_configured.dot, label: "Reachable · no data link" }
+    : map[sensor.state] ?? map.disconnected;
   const name = sim ? "Simulator" : sensor.mode === "csv_replay" ? "CSV replay" : "EVB Lite";
   return (
     <span className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wider ${sim ? "border-sim/50 bg-sim/10 text-purple-100" : m.tone}`}>

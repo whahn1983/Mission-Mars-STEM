@@ -162,7 +162,10 @@ export function LiveTest() {
           <div className="rounded-2xl border-2 border-alert/60 bg-red-950/50 p-4 text-red-100">
             <div className="font-display text-sm tracking-widest">SENSOR UNAVAILABLE</div>
             <p className="mt-1 text-sm">
-              {sensor?.stream_error || sensor?.last_error || "The accelerometer is not connected."} Operator: reconnect the sensor or switch to simulation mode in the dashboard.
+              {sensor?.stream_error || sensor?.last_error || "The accelerometer is not connected."}{" "}
+              {sensor?.connected && sensor.streaming_available === false
+                ? "Operator: the sensor answers, but its data link is not set up yet, so reconnecting will not help. Switch to simulation mode or import a CSV in the dashboard."
+                : "Operator: reconnect the sensor or switch to simulation mode in the dashboard."}
             </p>
           </div>
         )}
