@@ -7,7 +7,7 @@ This document tracks what is **known**, what is **assumed from a related product
 > * **ARM TEST** sets the sensor's maximum recording time (Operator → Analysis → *EVB Lite: max test length*, default 60 s) and sends the portal's Record request.
 > * The test stays armed until the operator presses **STOP TEST**. That sends the portal's Stop request, and the sensor returns the recording, which the app analyzes.
 >
-> The sensor's own CSV files are also recognized by the importer. The portal's live WebSocket stream is identified but not used (§3). No endpoint is hard-coded in the application code; everything comes from the profile.
+> The live graph on the Live Test screen uses the portal's own WebSocket stream (display only; see *Live view* below). The sensor's own CSV files are also recognized by the importer. No endpoint is hard-coded in the application code; everything comes from the profile.
 
 ---
 
@@ -82,7 +82,8 @@ Evidence from 2026-11-10 (operator capture of sensor `EVBS_V1F9L`):
 | Timestamp field, unit and epoch | `Timestamp`, integer **µs since the start of the recording** (0 … 998 070 for `duration` 1.00 s) | CSV + `/file_info` | 2026-11-10 |
 | Timestamp resolution | 1 µs units; every step exactly 570 µs, all distinct | CSV | 2026-11-10 |
 | Effective sample rate actually delivered | **1,754 Hz** (1,752 samples in 1.0 s, no gaps) | CSV | 2026-11-10 |
-| Live (streaming) vs record-then-download | Record-then-download is used. A live WebSocket stream exists (above); its delivered sample rate is not measured, so it is not used for measurements | HAR + portal script | 2026-11-10 |
+| Live (streaming) vs record-then-download | Record-then-download is used for measurements. The live WebSocket stream (above) feeds the on-screen graph only; its unit is detected from the resting reading, and the rate it delivers is shown in Operator → Sensor | HAR + portal script | 2026-11-10 |
+| Reply to `/stop` and the file transfer after it | First test on the real sensor (2026-11-10) ended with `RemoteProtocolError` on STOP: the sensor closed a connection without a complete HTTP reply. The portal ignores errors from its own `/stop` call. Which request it was is not yet known; the app now logs it (§6, Path B notes) | operator report | 2026-11-10 |
 | Can range/rate be set programmatically (documented?) | Yes, through the portal's own requests (above). The app only sets the **recording time**; range, rate and gravity compensation are read and checked, not changed | portal script | 2026-11-10 |
 | Range in use | ±16 g: value steps of 0.0047 m/s² = 0.48 mg match the manual's 0.488 mg resolution at ±16 g | CSV | 2026-11-10 |
 | Behaviour at ±16 g (flat clipping? wraps? flags?) | not tested yet | | |
@@ -250,6 +251,14 @@ The `samples` section then describes the recording's format (`"format": "csv"`, 
 Notes:
 * The live preview never starts a recording, and CAPTURE is not available in this mode.
 * **Cancel** also sends `/stop`, so the sensor is not left recording.
+* **Tolerant stop.** The sensor may answer `/stop`, or the file transfer after it, with a broken HTTP reply (`RemoteProtocolError`).
+  * A `/stop` without a proper reply counts as sent, as in the portal.
+  * If the sensor still reports recording progress 6 s later, the stop is sent once more.
+  * The record request is read as a stream, so a transfer that is cut off keeps the bytes that arrived.
+  * If the transfer is incomplete, the app downloads the saved file from `/csv`, but only when `/file_info` names a **different file than before the test**, so an older recording is never used. It retries for about 5 s. The test is flagged `RECORDING_DOWNLOADED_SEPARATELY` (info).
+  * If no new file appears, the part that arrived is analyzed, without its cut-off last line, and flagged `RECORDING_TRUNCATED` (warning). If nothing usable arrived, the error says to download the file in the portal and import it.
+  * The HTTP client never reuses connections, because the sensor closes them.
+  * Every step is logged: `docker compose logs app` shows which request misbehaved and how many bytes arrived.
 * Each recording overwrites the previous one on the sensor.
 * The sensor sends about 110 KB/s, so the download after STOP takes about half as long as the recording at 1.7 kHz.
 
@@ -261,6 +270,14 @@ The manual workflow also still works:
 4. **Operator → Data & export → Import CSV as a test**, choosing the gear, the drop height and **Data origin: Physical (EVB Lite)**. Leave both units on *auto*: the EVB Lite's file is recognized and read as µs and m/s².
 
 The importer accepts any CSV with a timestamp column and three acceleration columns (§8). It reports rows without timestamps instead of inventing them.
+
+### Live view (display only)
+
+The `live` section of the profile describes the portal's stream: `ws://<sensor>:81/`, text `START` / `STOP`, one JSON sample per message `{"t": <µs>, "ax", "ay", "az"}`. The sensor manager runs it while the Live Test screen is open or a test is running, and sends its samples **only to the on-screen graph**. They never reach the capture service or the analysis: the report always uses the full-rate recording.
+
+* With `"accel_unit": "auto"`, the unit is decided from the resting reading, about 1 g. If nothing is plausible after 600 samples, the recording's unit is used and a warning is logged. The profile's `axis_map` is applied.
+* If the stream is not available, the test still works and the graph appears in the report. Operator → Sensor shows the live view's state, rate and last error. A failed connection is retried every 5 s while the screen is open.
+* The recording that arrives after STOP TEST is not pushed to the live graph while the live view is running, because the graph already showed the test.
 
 ### Path C — a streaming transport (WebSocket, SSE, chunked HTTP)
 

@@ -87,6 +87,9 @@ class SensorManager:
         self._last_tele_publish = 0.0
         self._last_status_publish = 0.0
         self._last_published_state: tuple | None = None
+        # Display-only live view (record-mode sensors with a live stream).
+        self._live_retry_at = 0.0
+        self._last_live_at = 0.0
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
         self._wake = asyncio.Event()
@@ -286,6 +289,8 @@ class SensorManager:
                 await self._try_connect()
             return
 
+        await self._manage_live(now)
+
         # A live preview must never start a recording on a record-mode device:
         # each recording occupies the sensor for its whole configured time.
         preview_ok = self.adapter.info.capture_mode != "record"
@@ -343,6 +348,24 @@ class SensorManager:
                     self._backoff_level = 0
             except Exception as exc:  # noqa: BLE001
                 await self._on_failure(exc)
+
+    async def _manage_live(self, now: float) -> None:
+        """Run the adapter's display-only live stream while someone looks at
+        the live graph or a test is running. Its samples go to the on-screen
+        telemetry only, never to the capture service or the analysis."""
+        a = self.adapter
+        if not getattr(a, "live_supported", False):
+            return
+        want = self.hub.preview_requested or self._capture_wants_stream or self.streaming
+        if want and not a.live_running and now >= self._live_retry_at:
+            await a.start_live()
+            self._live_retry_at = now + 5.0  # if it fails, try again no sooner than this
+        elif not want and a.live_running:
+            await a.stop_live()
+        pts = a.drain_live()
+        if pts:
+            self._last_live_at = now
+            self._accumulate_telemetry(pts)
 
     async def _try_connect(self) -> None:
         self.state = ConnectionState.CONNECTING
@@ -402,7 +425,10 @@ class SensorManager:
                 cb(samples)
             except Exception:  # noqa: BLE001
                 log.exception("Sample listener failed")
-        self._accumulate_telemetry(samples)
+        # A record-mode recording arrives in one batch after the test; while
+        # the live view is running, the graph already showed the test live.
+        if not (self.adapter.info.capture_mode == "record" and time.monotonic() - self._last_live_at < 5.0):
+            self._accumulate_telemetry(samples)
 
     def _accumulate_telemetry(self, samples: list[Sample]) -> None:
         if not self.hub.clients:
@@ -490,6 +516,15 @@ class SensorManager:
             snap["profile"] = self.profile.summary()
             snap["streaming_available"] = self.profile.streaming_ready
             snap["last_http"] = getattr(self.adapter, "last_http", {})
+            a = self.adapter
+            if getattr(a, "live_supported", False):
+                snap["live_view"] = {
+                    "running": a.live_running,
+                    "rate_hz": _f(a.live_rate_hz, 0),
+                    "unit": a.live_unit,
+                    "error": a.live_error,
+                    "samples": a.live_samples,
+                }
         elif self.mode == "csv_replay":
             snap["replay"] = {
                 "file": self.replay.filename,

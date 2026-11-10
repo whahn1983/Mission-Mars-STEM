@@ -250,6 +250,16 @@ function SensorTab() {
                 </span>
               )}
             </div>
+            {sensor.live_view && (
+              <div className="mt-1 text-slate-300">
+                Live view:{" "}
+                {sensor.live_view.running
+                  ? `running${sensor.live_view.rate_hz ? `, ~${Math.round(sensor.live_view.rate_hz)} Hz` : ""}${sensor.live_view.unit ? `, ${sensor.live_view.unit}` : ""} (display only)`
+                  : sensor.live_view.error
+                    ? <span className="text-amber-200">unavailable: {sensor.live_view.error}</span>
+                    : "off (starts on the Live Test screen)"}
+              </div>
+            )}
             <div className="mt-1 text-xs text-slate-500">ARM TEST sets the max recording time to the app's "EVB Lite: max test length" (Analysis tab).</div>
           </div>
         )}

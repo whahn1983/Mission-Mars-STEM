@@ -50,6 +50,7 @@ export function LiveTest() {
   const elapsed = capture?.record_elapsed_s ?? null;
   const maxS = capture?.record_max_s ?? sensor?.sensor_settings?.duration_s ?? null;
   const stopTest = () => call(() => api.stop());
+  const live = record ? sensor?.live_view : undefined;
 
   useEffect(() => {
     setPreview(true);
@@ -150,9 +151,22 @@ export function LiveTest() {
             <LiveChart
               rangeG={range}
               simulated={sim}
-              emptyText={record ? "The sensor records the whole test. The graph appears after STOP TEST, when the recording has downloaded." : undefined}
+              emptyText={
+                record
+                  ? live && !live.error
+                    ? "Waiting for the sensor's live view…"
+                    : "The sensor records the whole test. The graph appears in the report after STOP TEST."
+                  : undefined
+              }
             />
           </div>
+          {record && (
+            <div className="mt-1 text-[11px] text-slate-500">
+              {live?.error
+                ? `Live view unavailable (${live.error}). The test still works: the full graph is in the report.`
+                : `Live view from the sensor's stream${live?.rate_hz ? ` (~${Math.round(live.rate_hz)} Hz)` : ""}, for display only. The report uses the sensor's full-rate recording.`}
+            </div>
+          )}
         </div>
       </div>
 

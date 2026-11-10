@@ -36,7 +36,7 @@ Open the **operator dashboard** with **Ctrl+Shift+O**, the faint ⚙ in the top-
 | Briefing | Picks a grade band, presses **START MISSION** | — |
 | Design | Chooses landing gear A–D, rotates the 3D model, toggles X-ray to see the payload | Fits the matching physical landing gear to the lander |
 | Predict | Gentle / Medium / Hard (1–4), a g range (5–8) or a number (9–12) | — |
-| Test | Presses **ARM TEST** (or Space) | Holds the lander still on the release point. When the screen says **RELEASE THE LANDER!**, the child can take their time. After the landing, press **STOP TEST** (or Space). The report appears a few seconds later, once the recording has downloaded. In simulation the student presses **RELEASE (SIMULATED DROP)** |
+| Test | Presses **ARM TEST** (or Space), watches the live graph | Holds the lander still on the release point. When the screen says **RELEASE THE LANDER!**, the child can take their time. After the landing (visible on the live graph), press **STOP TEST** (or Space). The report appears a few seconds later, once the recording has downloaded. In simulation the student presses **RELEASE (SIMULATED DROP)** |
 | Results | Sees the peak g, graph and outcome | Optional: mark *Landed upright?* / *Payload stayed in place?* (the yellow OPERATOR strip appears while you are unlocked) |
 | Improve | Compares designs, tries another | Swaps the gear |
 
@@ -54,6 +54,8 @@ The screen returns to the briefing automatically after 2 minutes of inactivity (
 | Readings over range | Lower the drop height or put the rigid design last. Over-range tests are flagged and not ranked |
 | "No valid impact" with the EVB Lite | STOP TEST was pressed before the landing, or the test reached the max test length first. Raise *EVB Lite: max test length* if needed |
 | "Gravity Compensation is ON" when arming | Sensor portal → Sensor Settings → disable Gravity Compensation, then ARM again |
+| Live graph stays empty on the Live Test screen | Operator → Sensor → *Live view* shows why. Tests still work without it: the full graph is in the report. Close other browser tabs that show the sensor portal's live stream |
+| An error on STOP TEST, or a note *"the sensor's saved file was downloaded instead"* | The sensor broke the connection while sending the file; the app downloads the saved file instead. If a test still fails, `docker compose logs app` shows the exact request. The file is also on the sensor: portal → File Manager → Download, then Operator → Data & export → Import CSV |
 | Report says **≥ 19.6 g, OVER SENSOR RANGE** | An axis hit the sensor's ±16 g limit. The graph shows \|a\|, the three axes combined, which can read above 16 g; the real peak was at least the number shown. Lower the drop height or add cushioning |
 | App not loading | `docker compose ps`; `docker compose restart`; see README troubleshooting |
 
