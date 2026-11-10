@@ -41,14 +41,18 @@ export function LiveTest() {
   const canStudentHeight = sim && settings?.allow_student_height_change;
   const height = active && capture?.mission ? capture.mission.drop_height_m : (canStudentHeight && dropHeight) || settings?.drop_height_m || 0.2;
   const sensorReady = !!sensor?.connected && sensor.streaming_available !== false;
-  // Record mode (EVB Lite): the sensor records the whole test and sends it
-  // when the operator presses STOP TEST (or at its maximum recording time),
-  // so there is no live graph and no CAPTURE.
+  // Record mode (EVB Lite): the sensor records a fixed window per test (a
+  // countdown) and sends the recording when it ends; with a stop request in
+  // the profile, STOP TEST can end it early. No CAPTURE.
   const record = !sim && sensor?.capture_mode === "record";
-  const canStop = record && capture?.record_can_stop !== false;
+  const canStop = record && !!capture?.record_can_stop;
+  const fixedWindow = record && !canStop;
   const stopping = record && !!capture?.record_stopping;
   const elapsed = capture?.record_elapsed_s ?? null;
-  const maxS = capture?.record_max_s ?? sensor?.sensor_settings?.duration_s ?? null;
+  const windowS = capture?.record_window_s ?? sensor?.sensor_settings?.duration_s ?? null;
+  const remaining = windowS != null && elapsed != null ? Math.max(0, windowS - elapsed) : null;
+  const landing = record && !!capture?.landing_seen;
+  const downloading = fixedWindow && state === "armed" && remaining !== null && remaining <= 0.05;
   const stopTest = () => call(() => api.stop());
   const live = record ? sensor?.live_view : undefined;
 
@@ -221,18 +225,51 @@ export function LiveTest() {
               RELEASE ▼ (SIMULATED DROP)
             </Button>
           )}
-          {state === "armed" && !sim && !stopping && (
+          {state === "armed" && !sim && !stopping && !fixedWindow && (
             <div className="animate-pulse rounded-2xl border-2 border-mars bg-mars/15 p-5 text-center font-display text-2xl font-black tracking-widest text-mars">
               RELEASE THE LANDER!
             </div>
           )}
-          {state === "armed" && record && !stopping && (
+          {state === "armed" && canStop && !stopping && (
             <div className="mt-2 flex items-baseline justify-between text-sm text-slate-400">
-              <span>{canStop ? "Take your time. Press STOP TEST after it lands." : "The test ends when the sensor's recording time is over."}</span>
+              <span>Take your time. Press STOP TEST after it lands.</span>
               <span className="shrink-0 whitespace-nowrap pl-2 font-mono text-slate-200">
                 {elapsed !== null ? `${Math.floor(elapsed)} s` : ""}
-                {maxS ? <span className="text-slate-500"> / max {Math.round(maxS)} s</span> : null}
+                {windowS ? <span className="text-slate-500"> / max {Math.round(windowS)} s</span> : null}
               </span>
+            </div>
+          )}
+          {state === "armed" && fixedWindow && !downloading && (
+            <>
+              {landing ? (
+                <div className="rounded-2xl border-2 border-go bg-go/15 p-5 text-center font-display text-2xl font-black tracking-widest text-green-200">
+                  LANDING DETECTED ✓
+                </div>
+              ) : (
+                <div className="animate-pulse rounded-2xl border-2 border-mars bg-mars/15 p-5 text-center font-display text-2xl font-black tracking-widest text-mars">
+                  RELEASE THE LANDER!
+                </div>
+              )}
+              {remaining !== null && windowS ? (
+                <div className="mt-3" aria-label={`${Math.ceil(remaining)} seconds left`}>
+                  <div className="mb-1 flex items-baseline justify-between text-xs uppercase tracking-widest text-slate-400">
+                    <span>{landing ? "Finishing the recording" : "Time left to drop"}</span>
+                    <span className="font-mono text-2xl font-bold text-slate-100">{Math.ceil(remaining)} s</span>
+                  </div>
+                  <div className="h-3 overflow-hidden rounded-full bg-space-700">
+                    <div
+                      className={`h-full rounded-full transition-[width] duration-1000 ease-linear ${landing ? "bg-go" : "bg-mars"}`}
+                      style={{ width: `${Math.min(100, (remaining / windowS) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ) : null}
+            </>
+          )}
+          {downloading && (
+            <div className="flex flex-col items-center gap-2 py-4 text-center text-slate-300">
+              <div className="h-10 w-10 animate-spin rounded-full border-4 border-telemetry/30 border-t-telemetry" />
+              Recording finished. Downloading it from the sensor…
             </div>
           )}
           {record && canStop && (state === "baseline" || state === "armed") && !stopping && (
@@ -274,7 +311,9 @@ export function LiveTest() {
             {sim
               ? "Space = arm / release."
               : record
-                ? "Space = arm, then Space again = stop test. Release the lander when the screen says RELEASE."
+                ? canStop
+                  ? "Space = arm, then Space again = stop test. Release the lander when the screen says RELEASE."
+                  : "Space = arm. Release the lander during the countdown; the report follows when the recording has downloaded."
                 : "Space = arm. The operator releases the lander; the impact is detected automatically."}{" "}
             Esc = cancel.
           </p>

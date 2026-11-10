@@ -65,7 +65,7 @@ export interface SensorSnapshot {
   capture_mode?: CaptureMode;
   record_progress?: number | null;
   record_can_stop?: boolean;
-  record_max_s?: number | null;
+  record_window_s?: number | null;
   /** The record-mode sensor's own settings, as it reports them. */
   sensor_settings?: { duration_s?: number; accel_range_g?: number; gravity_comp?: boolean | null; sample_rate_hz?: number };
   /** Display-only live stream from a record-mode sensor. */
@@ -101,9 +101,12 @@ export interface CaptureSnapshot {
   capture_mode?: CaptureMode;
   record_progress?: number | null;
   record_elapsed_s?: number | null;
-  record_max_s?: number | null;
+  /** Length of the fixed recording window (the sensor's recording time). */
+  record_window_s?: number | null;
   record_can_stop?: boolean;
   record_stopping?: boolean;
+  /** The live stream showed a free fall and a landing during this test. */
+  landing_seen?: boolean;
   mission: {
     configuration_id: number;
     configuration_code: string;
