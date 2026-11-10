@@ -75,6 +75,10 @@ class AdapterInfo:
     accel_range_g: float | None = None
     nominal_sample_rate_hz: float | None = None
     supports_streaming: bool = True
+    # "stream": samples arrive continuously while capturing. "record": the
+    # device records a fixed window and read_samples() returns the whole
+    # recording in one batch when it finishes (no live preview).
+    capture_mode: str = "stream"
     extra: dict[str, Any] = field(default_factory=dict)
 
 

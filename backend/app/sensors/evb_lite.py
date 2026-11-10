@@ -16,12 +16,19 @@ What it will do once the profile is verified (docs/evb-lite-integration.md):
   axis mapping and drop only exact duplicate timestamps (re-sent samples).
 * Use the device's own timestamps. Responses without timestamps are rejected
   rather than given synthetic ones.
+* In ``record`` mode (``capture.mode`` in the profile), send the documented
+  record request when capture starts. The device records a fixed window and
+  returns the whole recording in that response; ``read_samples()`` returns it
+  as one batch and reports progress from the optional progress endpoint while
+  the device records.
 
 No endpoint path, field name or unit is hard-coded here.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import csv
 import io
 import json
@@ -47,6 +54,7 @@ from .evb_profile import EVBProfile, json_get
 log = logging.getLogger(__name__)
 
 MAX_RAW_BYTES_PER_CAPTURE = 25 * 1024 * 1024
+PROGRESS_POLL_S = 0.5  # the sensor portal itself polls progress every 500 ms
 
 
 class EVBLiteAdapter:
@@ -78,6 +86,11 @@ class EVBLiteAdapter:
         self.raw_truncated = False
         self.duplicates_dropped = 0
         self.last_http: dict = {}
+        self._record_task: asyncio.Task | None = None
+        self._record_delivered = False
+        self._last_progress_poll = 0.0
+        self.record_progress: float | None = None
+        self.record_started_at: float | None = None
         self.info = AdapterInfo(
             adapter="evb_lite",
             source="evb_lite",
@@ -88,6 +101,7 @@ class EVBLiteAdapter:
             accel_range_g=self.range_g,
             nominal_sample_rate_hz=profile.nominal_sample_rate_hz,
             supports_streaming=profile.streaming_ready,
+            capture_mode=profile.capture_mode,
             extra={"profile": profile.summary()},
         )
 
@@ -142,6 +156,7 @@ class EVBLiteAdapter:
 
     async def disconnect(self) -> None:
         self._streaming = False
+        await self._cancel_recording()
         if self._client is not None:
             await self._client.aclose()
             self._client = None
@@ -195,6 +210,16 @@ class EVBLiteAdapter:
         self._last_unwrapped = 0
         self._prev_raw_int = None
         self.duplicates_dropped = 0
+        if self.profile.capture_mode == "record":
+            await self._cancel_recording()
+            self._ensure_client()
+            self._record_delivered = False
+            self.record_progress = None
+            self.record_started_at = time.monotonic()
+            self._last_progress_poll = 0.0
+            self._record_task = asyncio.create_task(self._run_recording(), name="evb-recording")
+            self._streaming = True
+            return
         if self.profile.start is not None:
             r = self.profile.start
             resp = await self._request(r.method, r.path, params=r.query or None, json=r.json_body)
@@ -206,6 +231,9 @@ class EVBLiteAdapter:
     async def stop_capture(self) -> None:
         was = self._streaming
         self._streaming = False
+        # No stop request has been observed for record mode: an unfinished
+        # recording keeps running on the device until its configured time.
+        await self._cancel_recording()
         if was and self.profile.stop is not None:
             r = self.profile.stop
             try:
@@ -216,6 +244,8 @@ class EVBLiteAdapter:
     async def read_samples(self) -> list[Sample]:
         if not self._streaming:
             return []
+        if self.profile.capture_mode == "record":
+            return await self._read_recording()
         spec = self.profile.samples
         now = time.monotonic()
         if (now - self._last_poll) * 1000 < spec.poll_interval_ms:
@@ -229,6 +259,72 @@ class EVBLiteAdapter:
             raise SensorError(f"Samples request failed with HTTP {resp.status_code}")
         self._keep_raw(resp)
         return self.parse_samples_payload(resp.content, resp.headers.get("content-type", ""))
+
+    # ------------------------------------------------------------ record mode
+    async def _run_recording(self) -> httpx.Response:
+        rec = self.profile.record
+        assert rec is not None
+        # The response only arrives once the device has finished recording
+        # and sent the file, so the read timeout covers the whole recording.
+        timeout = httpx.Timeout(self.timeout_s, read=rec.timeout_s)
+        try:
+            return await self._request("GET", rec.path, params=rec.query or None, timeout=timeout)
+        except SensorDisconnectedError as exc:
+            if isinstance(exc.__cause__, httpx.ReadTimeout):
+                raise SensorError(
+                    f"The EVB Lite recording did not finish within {rec.timeout_s:g} s. Check the recording time "
+                    "in the sensor portal (Sensor Settings) or raise capture.record.timeout_s in the profile."
+                ) from exc
+            raise
+
+    async def _cancel_recording(self) -> None:
+        task, self._record_task = self._record_task, None
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+
+    async def _poll_progress(self) -> None:
+        rec = self.profile.record
+        if rec is None or not rec.progress_path:
+            return
+        now = time.monotonic()
+        if now - self._last_progress_poll < PROGRESS_POLL_S:
+            return
+        self._last_progress_poll = now
+        try:
+            client = self._ensure_client()
+            resp = await client.get(rec.progress_path, timeout=httpx.Timeout(self.timeout_s))
+            # 400 {"error": "Data collection not in progress"} before the
+            # recording starts and after it ends.
+            if resp.status_code == 200:
+                value = json_get(resp.json(), rec.progress_field)
+                self.record_progress = max(0.0, min(100.0, float(value)))
+        except Exception as exc:  # noqa: BLE001 — progress is informational only
+            log.debug("EVB Lite progress poll failed: %s", exc)
+
+    async def _read_recording(self) -> list[Sample]:
+        task = self._record_task
+        if task is None or self._record_delivered:
+            return []
+        if not task.done():
+            await self._poll_progress()
+            return []
+        self._record_task = None
+        self._record_delivered = True
+        resp = task.result()  # re-raises a failed or timed-out recording
+        if resp.status_code >= 400:
+            excerpt = resp.text[:200].strip()
+            raise SensorError(
+                f"Record request {self.profile.record.path} failed with HTTP {resp.status_code}"
+                + (f": {excerpt}" if excerpt else "")
+            )
+        self._keep_raw(resp)
+        samples = self.parse_samples_payload(resp.content, resp.headers.get("content-type", ""))
+        if not samples:
+            raise SensorError("The EVB Lite recording contained no samples.")
+        self.record_progress = 100.0
+        return samples
 
     # ---------------------------------------------------------------- parsing
     def _keep_raw(self, resp: httpx.Response) -> None:

@@ -93,11 +93,11 @@ The full event-night runbook is in [`docs/operator-guide.md`](docs/operator-guid
 | Mode | Use it for | Data label |
 |---|---|---|
 | `simulation` (default) | No hardware, rehearsals, fallback | **simulated** |
-| `evb_lite` | The real sensor, once its protocol profile is verified | **physical** |
+| `evb_lite` | The real sensor (record mode, see below) | **physical** |
 | `csv_replay` | Replaying a recorded CSV through the live pipeline | as declared by the operator (default *unverified*) |
 | CSV import (Data tab) | Recording with the device's own tools, then importing | as declared by the operator |
 
-**EVB Lite status:** until `config/evb_profile.json` is filled in with verified behaviour, `evb_lite` mode only checks that the sensor's web portal answers and shows "reachability only". Live capture stays disabled, and the app asks you to use simulation or CSV import. Integration steps: [`docs/evb-lite-integration.md`](docs/evb-lite-integration.md) and [`docs/hardware-integration-checklist.md`](docs/hardware-integration-checklist.md).
+**EVB Lite status:** `config/evb_profile.json` holds the protocol verified on a real sensor (2026-11-10). The sensor runs in **record mode**: **ARM TEST** makes it record a fixed window (its recording time is set in the sensor's own portal, about 5 s is a good value), and the app analyzes the recording when it arrives. There is no live graph before the drop, because the sensor's live stream is not verified yet. The sensor's own CSV files can also be imported directly (µs and m/s² are detected). Set-up: [`docs/operator-guide.md`](docs/operator-guide.md) (sensor portal settings), [`docs/evb-lite-integration.md`](docs/evb-lite-integration.md) and [`docs/hardware-integration-checklist.md`](docs/hardware-integration-checklist.md).
 
 ---
 

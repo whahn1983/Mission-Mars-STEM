@@ -272,7 +272,10 @@ class SensorManager:
                 await self._try_connect()
             return
 
-        wanted = self._capture_wants_stream or self.hub.preview_requested
+        # A live preview must never start a recording on a record-mode device:
+        # each recording occupies the sensor for its whole configured time.
+        preview_ok = self.adapter.info.capture_mode != "record"
+        wanted = self._capture_wants_stream or (self.hub.preview_requested and preview_ok)
         if wanted and not self.streaming and now >= self._stream_block_until:
             try:
                 await self.adapter.start_capture()
@@ -457,6 +460,8 @@ class SensorManager:
             "consecutive_failures": self.consecutive_failures,
             "next_retry_in_s": round(max(0.0, self.next_retry_at - time.monotonic()), 1) if not self.connected else None,
             "samples_received": self.samples_received,
+            "capture_mode": info.capture_mode,
+            "record_progress": _f(getattr(self.adapter, "record_progress", None), 1),
             "battery_percent": d.get("battery_percent"),
             "detail": {k: v for k, v in d.items() if isinstance(v, (str, int, float, bool)) or v is None},
         }

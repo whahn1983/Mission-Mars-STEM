@@ -45,7 +45,7 @@ class CSVReplayAdapter:
         self.finished = False
 
     def load_bytes(self, data: bytes, *, filename: str, data_origin: str = "unverified",
-                   time_unit: str | None = None, accel_unit: str = "g") -> ParsedCSV:
+                   time_unit: str | None = None, accel_unit: str | None = None) -> ParsedCSV:
         parsed = parse_csv_bytes(data, time_unit=time_unit, accel_unit=accel_unit)
         order = np.argsort(parsed.t_ns, kind="stable")
         if not np.array_equal(order, np.arange(order.size)):

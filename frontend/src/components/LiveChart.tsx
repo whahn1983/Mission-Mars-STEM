@@ -4,7 +4,17 @@ import { telemetry } from "../lib/telemetry";
 const COLORS = { ax: "#f472b6", ay: "#a3e635", az: "#60a5fa", mag: "#22d3ee" };
 
 /** Canvas strip chart of live telemetry (redrawn every animation frame). */
-export function LiveChart({ windowMs = 4000, rangeG = 16, simulated = false }: { windowMs?: number; rangeG?: number; simulated?: boolean }) {
+export function LiveChart({
+  windowMs = 4000,
+  rangeG = 16,
+  simulated = false,
+  emptyText = "Waiting for live sensor data…",
+}: {
+  windowMs?: number;
+  rangeG?: number;
+  simulated?: boolean;
+  emptyText?: string;
+}) {
   const ref = useRef<HTMLCanvasElement>(null);
   const yMaxRef = useRef(3);
 
@@ -90,7 +100,7 @@ export function LiveChart({ windowMs = 4000, rangeG = 16, simulated = false }: {
         ctx.fillStyle = "rgba(148,163,184,0.7)";
         ctx.textAlign = "center";
         ctx.font = "16px Inter, sans-serif";
-        ctx.fillText("Waiting for live sensor data…", w / 2, h / 2);
+        ctx.fillText(emptyText, w / 2, h / 2);
         return;
       }
 
@@ -131,7 +141,7 @@ export function LiveChart({ windowMs = 4000, rangeG = 16, simulated = false }: {
     };
     raf = requestAnimationFrame(draw);
     return () => cancelAnimationFrame(raf);
-  }, [windowMs, rangeG, simulated]);
+  }, [windowMs, rangeG, simulated, emptyText]);
 
   return (
     <div className="relative h-full w-full">

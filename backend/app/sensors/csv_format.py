@@ -10,9 +10,12 @@ Accepted layouts (header row required, comma/semicolon/tab delimited):
   ``ax_g``/``ax``/``x``/``acc_x``/``accel_x``/``x_g`` (same for y/z).
 
 The units of an ambiguous ``timestamp``/``time`` column and of acceleration
-must be given explicitly by the caller (defaults: seconds, g). The device's
-own CSV format must be confirmed with real files before relying on it — see
-docs/evb-lite-integration.md.
+must be given explicitly by the caller (defaults: seconds, g), with one
+exception: the EVB Lite's own recording file (header ``Timestamp, Accel_X,
+Accel_Y, Accel_Z``, optionally with gyroscope/temperature columns) is
+recognized and read as microseconds and m/s². Both units were verified on a
+real recording, see docs/evb-lite-integration.md §3. Units the caller passes
+explicitly always win.
 
 Rows with an unparseable timestamp are *reported* (``missing_timestamps``)
 and dropped: the importer never invents timestamps. Rows with unparseable
@@ -44,8 +47,22 @@ _AXIS_NAMES = {
 }
 
 
+# EVB Lite recording CSV, verified against a real file
+# (docs/evb-lite-evidence/EVBS_V1F9L_2026-11-10_16-58-48_90.csv): integer
+# microseconds since the start of the recording, acceleration in m/s².
+EVB_LITE_TIME_COLUMN = "timestamp"
+EVB_LITE_AXIS_COLUMNS = ("accel_x", "accel_y", "accel_z")
+EVB_LITE_TIME_UNIT = "us"
+EVB_LITE_ACCEL_UNIT = "m/s2"
+
+
 class CSVFormatError(ValueError):
     pass
+
+
+def is_evb_lite_header(names: list[str]) -> bool:
+    """True for the EVB Lite's own recording header (normalized names)."""
+    return bool(names) and names[0] == EVB_LITE_TIME_COLUMN and all(c in names for c in EVB_LITE_AXIS_COLUMNS)
 
 
 @dataclass
@@ -63,6 +80,7 @@ class ParsedCSV:
     missing_timestamp_rows: list[int] = field(default_factory=list)
     invalid_values: int = 0
     warnings: list[str] = field(default_factory=list)
+    detected_format: str | None = None
 
 
 def _norm(name: str) -> str:
@@ -83,9 +101,11 @@ def parse_csv_bytes(
     data: bytes,
     *,
     time_unit: str | None = None,
-    accel_unit: str = "g",
+    accel_unit: str | None = None,
     max_rows: int = 2_000_000,
 ) -> ParsedCSV:
+    """``accel_unit=None`` means: detect it (EVB Lite file or a unit suffix in
+    the column name), otherwise g."""
     text = data.decode("utf-8-sig", errors="replace")
     sample = text[:4096]
     try:
@@ -103,6 +123,7 @@ def parse_csv_bytes(
     if not header:
         raise CSVFormatError("The CSV file is empty or has no header row.")
     names = [_norm(h) for h in header]
+    evb = is_evb_lite_header(names)
 
     t_col = None
     t_unit_detected = None
@@ -116,9 +137,15 @@ def parse_csv_bytes(
             "No timestamp column found. Expected one of: timestamp_ns, time_ms, time_s, timestamp, time. "
             "Samples without sensor timestamps cannot be analyzed."
         )
-    unit = t_unit_detected if t_unit_detected != "?" else (time_unit or "s")
     warnings: list[str] = []
-    if t_unit_detected == "?" and time_unit is None:
+    if t_unit_detected != "?":
+        unit = t_unit_detected
+    elif time_unit is not None:
+        unit = time_unit
+    elif evb:
+        unit = EVB_LITE_TIME_UNIT
+    else:
+        unit = "s"
         warnings.append(f"Timestamp column '{header[t_col]}' has no unit; assumed seconds.")
 
     axis_idx: dict[str, int] = {}
@@ -136,13 +163,19 @@ def parse_csv_bytes(
         missing = [a for a in "xyz" if a not in axis_idx]
         raise CSVFormatError(f"Could not find acceleration column(s) for axis {', '.join(missing)}.")
 
-    a_unit = accel_unit
-    # Unit hints in the column names override the default.
+    # Unit hints in the column names override the default; an explicit unit
+    # from the caller overrides both.
     xname = names[axis_idx["x"]]
-    if xname.endswith("_mg"):
+    if accel_unit is not None:
+        a_unit = accel_unit
+    elif xname.endswith("_mg"):
         a_unit = "mg"
     elif xname.endswith("_ms2") or xname.endswith("_m_s2"):
         a_unit = "m/s2"
+    elif evb:
+        a_unit = EVB_LITE_ACCEL_UNIT
+    else:
+        a_unit = "g"
 
     t_raw: list[float] = []
     vals: list[tuple[float, float, float]] = []
@@ -188,6 +221,14 @@ def parse_csv_bytes(
     ax, ay, az = (to_g(v[:, 0], a_unit), to_g(v[:, 1], a_unit), to_g(v[:, 2], a_unit))
     if missing_rows:
         warnings.append(f"{len(missing_rows)} row(s) had missing timestamps and were not used.")
+    if a_unit == "g":
+        mag = np.sqrt(ax**2 + ay**2 + az**2)
+        med = float(np.nanmedian(mag)) if np.isfinite(mag).any() else float("nan")
+        if 8.0 <= med <= 12.0:
+            warnings.append(
+                f"Acceleration was read as g, but the typical magnitude is {med:.1f}. "
+                "That looks like m/s² (resting ≈ 9.8 m/s²); re-import with the unit set to m/s²."
+            )
     return ParsedCSV(
         t_ns=t_ns,
         ax=ax,
@@ -202,4 +243,5 @@ def parse_csv_bytes(
         missing_timestamp_rows=missing_rows[:100],
         invalid_values=invalid,
         warnings=warnings,
+        detected_format="evb_lite" if evb else None,
     )
