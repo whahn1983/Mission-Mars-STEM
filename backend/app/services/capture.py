@@ -590,6 +590,8 @@ class CaptureService:
                     "code": "DEVICE_RESENT_SAMPLES", "severity": "info",
                     "message": f"{dups} re-sent samples with already-seen timestamps were ignored.",
                 })
+            # Notes from the adapter about this capture (e.g. a cut-off transfer).
+            extra_flags.extend(list(getattr(self.manager.adapter, "capture_flags", None) or []))
             if self._raw_truncated:
                 extra_flags.append({"code": "RAW_PAYLOADS_TRUNCATED", "severity": "info",
                                     "message": "Raw device responses exceeded the storage limit; parsed samples are complete."})

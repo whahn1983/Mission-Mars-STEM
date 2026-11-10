@@ -49,6 +49,7 @@
         "documented_in": "EVident Vibration Sensor User Manual §6.2 (Stop button); portal script /js/index.js handleUniversalStop"
       },
       "download_path": "/csv",
+      "file_info_path": "/file_info",
       "settings": {
         "_comment": "Read-only GET /settings: {accel, gyro, temp, odr, accel_range, gyro_range, duration, gravity_comp}.",
         "path": "/settings",
@@ -66,6 +67,22 @@
         "documented_in": "EVident Vibration Sensor User Manual §6.1 (recording time); portal script /js/index.js bindDurationAutoSubmit (POST /duration?value=<s>)"
       }
     }
+  },
+  "live": {
+    "_comment": "Display-only live view: the portal's own stream (wsConnect / handleStartButton in /js/index.js). ws://<sensor>:81/, send START/STOP, one JSON sample per message {\"t\": <us>, \"ax\", \"ay\", \"az\"}. Measurements always come from the recording.",
+    "port": 81,
+    "path": "/",
+    "start_message": "START",
+    "stop_message": "STOP",
+    "fields": {
+      "timestamp": "t",
+      "ax": "ax",
+      "ay": "ay",
+      "az": "az"
+    },
+    "timestamp_unit": "us",
+    "accel_unit": "auto",
+    "documented_in": "portal script /js/index.js wsConnect (ws://<host>:81/, START/STOP, JSON {t, ax, ay, az})"
   },
   "samples": {
     "_comment": "Format of the recording. Timestamp = microseconds since the recording started (570 us steps observed); Accel_* = m/s2 (resting magnitude 9.67 m/s2).",

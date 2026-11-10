@@ -85,6 +85,18 @@ def test_record_request_must_be_documented_and_read_only():
 
 
 # ---------------------------------------------------------------- adapter
+class CutStream(httpx.AsyncByteStream):
+    """A response body that stops half-way, like a connection the sensor drops."""
+
+    def __init__(self, part: bytes, request: httpx.Request):
+        self.part, self.request = part, request
+
+    async def __aiter__(self):
+        yield self.part
+        raise httpx.RemoteProtocolError("peer closed connection without sending complete message body",
+                                        request=self.request)
+
+
 class RecordingDevice:
     """Mock of the observed portal behavior (HAR + /js/index.js): /start on
     port 80 redirects to port 8000, which answers with the CSV once the
@@ -94,11 +106,16 @@ class RecordingDevice:
 
     def __init__(self, body: bytes = RECORDING, record_s: float = 0.3, status: int = 200,
                  duration: float = 1.0, gravity_comp: bool = False, accel_range: int = 16,
-                 status_after_stop: int = 200):
+                 status_after_stop: int = 200, stop_reply: str = "ok", after_stop: str = "ok",
+                 saves_file: bool = True):
         self.body, self.record_s, self.status = body, record_s, status
         self.settings = {"accel": True, "gyro": False, "temp": False, "odr": 1666.0, "accel_range": accel_range,
                          "gyro_range": 2000, "duration": duration, "gravity_comp": gravity_comp}
         self.status_after_stop = status_after_stop
+        # stop_reply: "ok" | "drop" (close without a reply, like a flaky stop handler)
+        # after_stop: "ok" | "cut" (send part of the file, then close) | "drop" (no response)
+        self.stop_reply, self.after_stop, self.saves_file = stop_reply, after_stop, saves_file
+        self.files = 0  # recordings saved on the sensor
         self.requests: list[httpx.Request] = []
         self.recording = False
         self._stopped = asyncio.Event()
@@ -120,15 +137,26 @@ class RecordingDevice:
             except asyncio.TimeoutError:
                 stopped = False
             self.recording = False
+            if self.saves_file:
+                self.files += 1
             code = self.status_after_stop if stopped else self.status
             if code != 200:
                 return httpx.Response(code, json={"error": "busy"})
+            if stopped and self.after_stop == "drop":
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.", request=req)
+            if stopped and self.after_stop == "cut":
+                return httpx.Response(200, headers={"Content-Type": "text/csv", "Content-Length": str(len(self.body))},
+                                      stream=CutStream(self.body[: len(self.body) // 2], req))
             return httpx.Response(200, content=self.body, headers={"Content-Type": "text/csv"})
         if path == "/stop":
             if not self.recording:
                 return httpx.Response(400, json={"error": "Data collection not in progress"})
             self._stopped.set()
+            if self.stop_reply == "drop":
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.", request=req)
             return httpx.Response(200, json={"status": "Stopped."})
+        if path == "/file_info":
+            return httpx.Response(200, json={"filename": f"EVBS_TEST_{self.files}", "duration": 1.0})
         if path == "/progress":
             if self.recording:
                 return httpx.Response(200, json={"progress": 42})
@@ -228,6 +256,52 @@ async def test_failed_response_after_stop_falls_back_to_downloading_the_file():
     await a.stop_recording()
     samples, _ = await read_until_samples(a)
     assert len(samples) == 1752 and "/csv" in dev.paths()
+
+
+async def test_stop_without_a_proper_reply_still_delivers_the_recording():
+    dev = RecordingDevice(record_s=30.0, stop_reply="drop")
+    a = EVBLiteAdapter(host=HOST, profile=shipped_profile(), transport=httpx.MockTransport(dev))
+    await a.start_capture()
+    await asyncio.sleep(0.05)
+    assert await a.stop_recording() is True, "a garbled reply to /stop counts as sent, like in the portal"
+    samples, _ = await read_until_samples(a)
+    assert len(samples) == 1752 and not a.capture_flags
+
+
+@pytest.mark.parametrize("after_stop", ["cut", "drop"])
+async def test_broken_transfer_after_stop_downloads_the_new_saved_file(after_stop):
+    dev = RecordingDevice(record_s=30.0, after_stop=after_stop)
+    a = EVBLiteAdapter(host=HOST, profile=shipped_profile(), transport=httpx.MockTransport(dev))
+    await a.start_capture()
+    await asyncio.sleep(0.05)
+    await a.stop_recording()
+    samples, _ = await read_until_samples(a)
+    assert len(samples) == 1752 and "/csv" in dev.paths()
+    assert [f["code"] for f in a.capture_flags] == ["RECORDING_DOWNLOADED_SEPARATELY"]
+
+
+async def test_cut_transfer_without_a_new_file_keeps_the_part_that_arrived():
+    dev = RecordingDevice(record_s=30.0, after_stop="cut", saves_file=False)
+    a = EVBLiteAdapter(host=HOST, profile=shipped_profile(), transport=httpx.MockTransport(dev))
+    a.download_retry_s = 0.01
+    await a.start_capture()
+    await asyncio.sleep(0.05)
+    await a.stop_recording()
+    samples, _ = await read_until_samples(a, timeout=10)
+    assert "/csv" not in dev.paths(), "the older file on the sensor is never used for this test"
+    assert 800 < len(samples) < 900 and [f["code"] for f in a.capture_flags] == ["RECORDING_TRUNCATED"]
+    assert all(s.ax_g is not None and s.az_g is not None for s in samples), "the cut-off last line is dropped"
+
+
+async def test_broken_transfer_and_no_data_is_a_clear_error():
+    dev = RecordingDevice(record_s=30.0, after_stop="drop", saves_file=False)
+    a = EVBLiteAdapter(host=HOST, profile=shipped_profile(), transport=httpx.MockTransport(dev))
+    a.download_retry_s = 0.01
+    await a.start_capture()
+    await asyncio.sleep(0.05)
+    await a.stop_recording()
+    with pytest.raises(SensorError, match="Import CSV"):
+        await read_until_samples(a, timeout=10)
 
 
 async def test_max_recording_time_is_set_only_when_it_differs():
@@ -403,3 +477,106 @@ async def test_real_resting_recording_is_saved_as_no_impact(record_capture):
     t = cap.repo.get_test(cap.test_id)
     assert t["measured_peak_g"] is None
     assert "NO_IMPACT" in json.dumps(t)
+
+
+# ---------------------------------------------------------------- live view (display only)
+class LiveSensor:
+    """WebSocket server speaking the portal's stream protocol (/js/index.js
+    wsConnect): text START/STOP, a status message, one JSON sample per message."""
+
+    def __init__(self, unit="m/s2", n=400):
+        self.unit, self.n, self.received = unit, n, []
+
+    async def handler(self, ws):
+        k = {"m/s2": 9.80665, "g": 1.0, "mg": 1000.0}[self.unit]
+        async for msg in ws:
+            self.received.append(msg)
+            if msg == "START":
+                await ws.send(json.dumps({"type": "status", "stream": "on"}))
+                for i in range(self.n):
+                    # resting, label up: z reads -1 g, like the real recording
+                    await ws.send(json.dumps({"t": 1_000_000 + i * 570, "ax": -0.006 * k, "ay": -0.03 * k, "az": -0.986 * k}))
+            elif msg == "STOP":
+                await ws.send(json.dumps({"type": "status", "stream": "off"}))
+
+
+@pytest.fixture
+async def live_sensor():
+    from websockets.asyncio.server import serve
+
+    sensors = []
+
+    async def start(**kw):
+        sensor = LiveSensor(**kw)
+        server = await serve(sensor.handler, "127.0.0.1", 0)
+        sensor.port = server.sockets[0].getsockname()[1]
+        sensors.append(server)
+        return sensor
+
+    yield start
+    for server in sensors:
+        server.close()
+        await server.wait_closed()
+
+
+def live_adapter(port):
+    prof = shipped_profile()
+    prof.live.port = port
+    return EVBLiteAdapter(host="127.0.0.1", profile=prof)
+
+
+async def drain_until(a, n, timeout=3.0):
+    got, end = [], time.monotonic() + timeout
+    while len(got) < n and time.monotonic() < end:
+        got += a.drain_live()
+        await asyncio.sleep(0.02)
+    return got
+
+
+@pytest.mark.parametrize("unit", ["m/s2", "g", "mg"])
+async def test_live_view_detects_units_and_maps_axes(live_sensor, unit):
+    sensor = await live_sensor(unit=unit)
+    a = live_adapter(sensor.port)
+    assert a.live_supported
+    await a.start_live()
+    pts = await drain_until(a, 400)
+    assert len(pts) == 400 and a.live_unit == unit
+    assert pts[0].timestamp_ns == 1_000_000_000 and pts[1].timestamp_ns - pts[0].timestamp_ns == 570_000
+    assert pts[0].az_g == pytest.approx(0.986) and pts[0].ay_g == pytest.approx(-0.03), "g, with +z up"
+    assert a.live_rate_hz == pytest.approx(1754.4, rel=0.01)
+    await a.stop_live()
+    await asyncio.sleep(0.05)
+    assert sensor.received[:1] == ["START"] and "STOP" in sensor.received and not a.live_running
+
+
+async def test_live_view_failure_is_reported_not_raised():
+    a = live_adapter(1)  # nothing listens there
+    await a.start_live()
+    for _ in range(100):
+        if not a.live_running:
+            break
+        await asyncio.sleep(0.02)
+    assert not a.live_running and a.live_error
+
+
+async def test_live_samples_feed_the_graph_only(env, store, database, live_sensor):
+    sensor = await live_sensor(n=300)
+    hub = PreviewHub()
+    hub.add()  # a browser is connected
+    mgr = SensorManager(env, store, hub, database)
+    mgr.adapter = live_adapter(sensor.port)
+    mgr.mode = "evb_lite"
+    mgr.state = ConnectionState.CONNECTED
+    mgr.last_status_check = time.monotonic() + 1e6  # no HTTP status polls in this test
+    seen = []
+    mgr.add_listener(seen.append)
+    for _ in range(100):
+        await mgr._tick()
+        if mgr._telemetry or mgr._tele_bucket:
+            break
+        await asyncio.sleep(0.02)
+    assert mgr._telemetry or mgr._tele_bucket, "live samples reach the on-screen graph"
+    assert not seen and mgr.samples_received == 0, "and never the capture service or the analysis"
+    assert not mgr.streaming, "the live view does not start a recording"
+    assert mgr.snapshot()["live_view"]["running"]
+    await mgr.adapter.stop_live()

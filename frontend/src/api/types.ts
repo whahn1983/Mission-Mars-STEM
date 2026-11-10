@@ -68,6 +68,8 @@ export interface SensorSnapshot {
   record_max_s?: number | null;
   /** The record-mode sensor's own settings, as it reports them. */
   sensor_settings?: { duration_s?: number; accel_range_g?: number; gravity_comp?: boolean | null; sample_rate_hz?: number };
+  /** Display-only live stream from a record-mode sensor. */
+  live_view?: { running: boolean; rate_hz: number | null; unit: string | null; error: string | null; samples: number };
   battery_percent: number | null;
   detail: Record<string, unknown>;
   streaming_available: boolean;

@@ -71,9 +71,28 @@ class RecordSpec:
     progress_field: str = "progress"
     stop: ControlRequest | None = None
     download_path: str | None = None
+    # GET returning {"filename": …} of the last recording. Required for the
+    # download fallback, so an older recording is never taken for this test.
+    file_info_path: str | None = None
     settings_path: str | None = None
     settings_fields: dict = field(default_factory=dict)
     set_duration: DurationSetter | None = None
+
+
+@dataclass
+class LiveSpec:
+    """Display-only live stream over a WebSocket on the sensor:
+    ``ws://<host>:<port><path>``, ``start_message``/``stop_message`` text
+    frames, one JSON sample per message. Never used for measurements."""
+
+    port: int = 81
+    path: str = "/"
+    start_message: str = "START"
+    stop_message: str = "STOP"
+    fields: dict = field(default_factory=lambda: {"timestamp": "t", "ax": "ax", "ay": "ay", "az": "az"})
+    timestamp_unit: str = "us"
+    accel_unit: str = "auto"  # auto | g | mg | m/s2
+    documented_in: str = ""
 
 
 @dataclass
@@ -107,6 +126,7 @@ class EVBProfile:
     stop: ControlRequest | None = None
     capture_mode: str = "stream"
     record: RecordSpec | None = None
+    live: LiveSpec | None = None
     samples: SamplesSpec = field(default_factory=SamplesSpec)
     axis_map: dict = field(default_factory=lambda: {"x": "+x", "y": "+y", "z": "+z"})
     accel_range_g: float | None = None
@@ -144,6 +164,7 @@ class EVBProfile:
             "record_path": self.record.path if self.record else None,
             "record_timeout_s": self.record.timeout_s if self.record else None,
             "record_can_stop": bool(self.record and self.record.stop),
+            "live_view": bool(self.live),
             "record_sets_duration": bool(self.record and self.record.set_duration),
             "streaming_ready": self.streaming_ready,
             "loaded_from": self.loaded_from,
@@ -213,9 +234,11 @@ def _record(d: dict | None, problems: list[str]) -> RecordSpec | None:
             problems.append("capture.record.stop ends a recording on the device and requires 'documented_in'")
             ok = False
     download = d.get("download_path")
+    file_info = d.get("file_info_path")
     settings = d.get("settings") or {}
     settings_path = settings.get("path")
-    for name, v in (("capture.record.download_path", download), ("capture.record.settings.path", settings_path)):
+    for name, v in (("capture.record.download_path", download), ("capture.record.settings.path", settings_path),
+                    ("capture.record.file_info_path", file_info)):
         if v is not None and not str(v).startswith("/"):
             problems.append(f"{name} must start with '/'")
             ok = False
@@ -239,10 +262,46 @@ def _record(d: dict | None, problems: list[str]) -> RecordSpec | None:
         path=str(path), documented_in=doc, query=dict(d.get("query") or {}), timeout_s=timeout,
         progress_path=str(progress) if progress else None, progress_field=str(d.get("progress_field") or "progress"),
         stop=stop, download_path=str(download) if download else None,
+        file_info_path=str(file_info) if file_info else None,
         settings_path=str(settings_path) if settings_path else None,
         settings_fields={k: v for k, v in dict(settings.get("fields") or {}).items() if v},
         set_duration=set_duration,
     )
+
+
+def _live(d: dict | None, problems: list[str]) -> LiveSpec | None:
+    if not d:
+        return None
+    try:
+        port = int(d.get("port", 81))
+        if not 1 <= port <= 65535:
+            raise ValueError
+    except (TypeError, ValueError):
+        problems.append("live.port must be a TCP port number")
+        return None
+    path = str(d.get("path") or "/")
+    if not path.startswith("/"):
+        problems.append("live.path must start with '/'")
+        return None
+    unit = str(d.get("accel_unit") or "auto").lower().replace("²", "2")
+    if unit not in ("auto", "g", "mg", "m/s2", "m/s^2"):
+        problems.append("live.accel_unit must be auto, g, mg or m/s2")
+        return None
+    t_unit = str(d.get("timestamp_unit") or "us")
+    if t_unit not in ("s", "ms", "us", "ns"):
+        problems.append("live.timestamp_unit must be one of s, ms, us, ns")
+        return None
+    fields = dict(d.get("fields") or {})
+    if any(not fields.get(k) for k in ("timestamp", "ax", "ay", "az")):
+        problems.append("live.fields needs timestamp, ax, ay and az")
+        return None
+    if not str(d.get("documented_in") or "").strip():
+        problems.append("live requires 'documented_in' (where the stream was observed)")
+        return None
+    return LiveSpec(port=port, path=path, start_message=str(d.get("start_message") or "START"),
+                    stop_message=str(d.get("stop_message") or "STOP"),
+                    fields={k: str(fields[k]) for k in ("timestamp", "ax", "ay", "az")},
+                    timestamp_unit=t_unit, accel_unit=unit, documented_in=str(d["documented_in"]).strip())
 
 
 def parse_profile(raw: dict, *, loaded_from: str | None = None) -> EVBProfile:
@@ -325,6 +384,7 @@ def parse_profile(raw: dict, *, loaded_from: str | None = None) -> EVBProfile:
         stop=_control(capture.get("stop"), "capture.stop", problems),
         capture_mode=capture_mode,
         record=record,
+        live=_live(raw.get("live"), problems),
         samples=samples,
         axis_map={k: str(axis_map.get(k, f"+{k}")) for k in "xyz"},
         accel_range_g=raw.get("accel_range_g"),

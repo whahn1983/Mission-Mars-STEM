@@ -16,6 +16,9 @@ What it will do once the profile is verified (docs/evb-lite-integration.md):
   axis mapping and drop only exact duplicate timestamps (re-sent samples).
 * Use the device's own timestamps. Responses without timestamps are rejected
   rather than given synthetic ones.
+* Optionally (``live`` in the profile) read the sensor's own live stream for
+  the on-screen graph. Live samples are for display only and never reach
+  the analysis: measurements always come from the recording.
 * In ``record`` mode (``capture.mode`` in the profile), send the documented
   record request when capture starts. The device records and returns the
   whole recording in that response; ``read_samples()`` returns it as one
@@ -35,7 +38,11 @@ import csv
 import io
 import json
 import logging
+import math
+import statistics
 import time
+from collections import deque
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -57,6 +64,32 @@ log = logging.getLogger(__name__)
 
 MAX_RAW_BYTES_PER_CAPTURE = 25 * 1024 * 1024
 PROGRESS_POLL_S = 0.5  # the sensor portal itself polls progress every 500 ms
+LIVE_SILENCE_S = 5.0  # no live sample for this long after START → re-send it, then give up
+_UNIT_TO_G = {"g": 1.0, "mg": 1e-3, "m/s2": 1.0 / 9.80665, "m/s^2": 1.0 / 9.80665}
+_TIME_TO_NS = {"s": 1_000_000_000, "ms": 1_000_000, "us": 1_000, "ns": 1}
+
+
+def detect_accel_unit(magnitudes: list[float]) -> str | None:
+    """Unit of a resting (≈1 g) reading: g, mg or m/s². None if unclear."""
+    if len(magnitudes) < 20:
+        return None
+    med = statistics.median(magnitudes)
+    if 0.6 <= med <= 1.6:
+        return "g"
+    if 6.0 <= med <= 14.0:
+        return "m/s2"
+    if 600.0 <= med <= 1600.0:
+        return "mg"
+    return None
+
+
+@dataclass
+class _Recording:
+    status: int | None = None
+    content_type: str = ""
+    body: bytes = b""
+    expected_bytes: int | None = None
+    error: str | None = None
 
 
 class EVBLiteAdapter:
@@ -98,6 +131,24 @@ class EVBLiteAdapter:
         self.record_max_s: float | None = None
         self.sensor_settings: dict = {}
         self._stop_requested = False
+        self._stop_sent_at = 0.0
+        self._stop_resent = False
+        self._file_before: str | None = None
+        self.record_sending: float | None = None
+        # Notes for the stored test (e.g. a cut-off transfer); drained by the
+        # capture service.
+        self.capture_flags: list[dict] = []
+        self.download_retry_s = 1.0
+        # Live view (display only).
+        self._live_task: asyncio.Task | None = None
+        self._live_ws: Any = None
+        self._live_queue: deque[Sample] = deque(maxlen=20_000)
+        self._live_pending: list[tuple[int, float, float, float]] = []
+        self._live_times: deque[int] = deque(maxlen=4000)
+        self.live_unit: str | None = None
+        self.live_error: str | None = None
+        self._live_stopping = False
+        self.live_samples = 0
         self.info = AdapterInfo(
             adapter="evb_lite",
             source="evb_lite",
@@ -133,6 +184,9 @@ class EVBLiteAdapter:
                 transport=self._transport,
                 follow_redirects=True,
                 trust_env=False,  # never route LAN sensor traffic through a proxy
+                # The sensor closes every connection ("Connection: close");
+                # never reuse one it may already have dropped.
+                limits=httpx.Limits(max_keepalive_connections=0),
             )
         return self._client
 
@@ -144,6 +198,10 @@ class EVBLiteAdapter:
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError,
                 httpx.ReadError, httpx.WriteError, httpx.PoolTimeout) as exc:
             self.last_http = {"path": path, "error": f"{type(exc).__name__}: {exc}"}
+            if isinstance(exc, (httpx.RemoteProtocolError, httpx.ReadError)):
+                raise SensorDisconnectedError(
+                    f"The EVB Lite closed the connection during {method} {path} ({type(exc).__name__}: {exc})"
+                ) from exc
             raise SensorDisconnectedError(f"Cannot reach EVB Lite at {self.base_url}: {type(exc).__name__}") from exc
         except httpx.HTTPError as exc:
             self.last_http = {"path": path, "error": f"{type(exc).__name__}: {exc}"}
@@ -163,6 +221,7 @@ class EVBLiteAdapter:
 
     async def disconnect(self) -> None:
         self._streaming = False
+        await self.stop_live()
         await self._cancel_recording()
         if self._client is not None:
             await self._client.aclose()
@@ -229,6 +288,9 @@ class EVBLiteAdapter:
             self._ensure_client()
             await self._prepare_recording()
             self._stop_requested = False
+            self._stop_resent = False
+            self.record_sending = None
+            self.capture_flags = []
             self._record_delivered = False
             self.record_progress = None
             self.record_started_at = time.monotonic()
@@ -327,6 +389,18 @@ class EVBLiteAdapter:
             self.info.accel_range_g = self.range_g
         return out
 
+    async def _last_file_name(self) -> str | None:
+        rec = self.profile.record
+        if rec is None or not rec.file_info_path:
+            return None
+        resp = await self._request("GET", rec.file_info_path)
+        if resp.status_code >= 400:
+            return None
+        with contextlib.suppress(ValueError, TypeError, KeyError, AttributeError):
+            name = resp.json().get("filename")
+            return str(name) if name else None
+        return None
+
     async def _prepare_recording(self) -> None:
         """Check and (if configured) set the device's recording settings."""
         rec = self.profile.record
@@ -353,6 +427,13 @@ class EVBLiteAdapter:
                 got = float(resp.json()["duration"])
             self.sensor_settings["duration_s"] = got
             log.info("EVB Lite recording time set to %g s", got)
+        # Name of the file already on the sensor: a download fallback must
+        # return a different (newer) file.
+        self._file_before = None
+        try:
+            self._file_before = await self._last_file_name()
+        except SensorError as exc:
+            log.debug("Could not read the last file name: %s", exc)
 
     def _record_timeout_s(self) -> float:
         rec = self.profile.record
@@ -365,40 +446,98 @@ class EVBLiteAdapter:
     async def stop_recording(self) -> bool:
         """End the recording early with the profile's stop request. The open
         record request then delivers what was recorded. Returns False when the
-        profile has no stop request or nothing is recording."""
+        profile has no stop request or nothing is recording.
+
+        Like the sensor portal (which ignores errors from its own stop call), a
+        stop whose reply is missing or garbled counts as sent: the outcome is
+        judged by what the record request delivers."""
         rec = self.profile.record
         if rec is None or rec.stop is None or self._record_task is None or self._record_task.done():
             return False
         r = rec.stop
-        resp = await self._request(r.method, r.path, params=r.query or None, json=r.json_body,
-                                   timeout=httpx.Timeout(self.timeout_s))
-        if resp.status_code >= 400:
+        self._stop_sent_at = time.monotonic()
+        try:
+            resp = await self._request(r.method, r.path, params=r.query or None, json=r.json_body,
+                                       timeout=httpx.Timeout(self.timeout_s))
+        except SensorDisconnectedError as exc:
+            if not isinstance(exc.__cause__, (httpx.RemoteProtocolError, httpx.ReadError, httpx.ReadTimeout)):
+                raise
+            log.warning("EVB Lite: no proper reply to %s %s (%s: %s); treating the stop as received",
+                        r.method, r.path, type(exc.__cause__).__name__, exc.__cause__)
+            self._stop_requested = True
+            return True
+        if resp.status_code == 400:
+            # {"error": "Data collection not in progress"}: the recording has
+            # just ended by itself and the file is on its way.
+            log.info("EVB Lite reported no recording in progress on stop; waiting for the file")
+        elif resp.status_code >= 400:
             raise SensorError(f"Stop request {r.method} {r.path} failed with HTTP {resp.status_code}")
         self._stop_requested = True
         return True
 
-    async def _download_last_recording(self) -> httpx.Response | None:
+    async def _download_last_recording(self) -> bytes | None:
+        """Fallback after a failed or cut-off transfer: download the sensor's
+        saved file, but only if the sensor reports a file other than the one
+        it held before this test (never an older recording)."""
         rec = self.profile.record
-        if rec is None or not rec.download_path:
+        if rec is None or not rec.download_path or not rec.file_info_path:
             return None
-        resp = await self._request("GET", rec.download_path, timeout=httpx.Timeout(self.timeout_s, read=self._record_timeout_s()))
-        return resp if resp.status_code < 400 and resp.content.strip() else None
+        for attempt in range(5):
+            if attempt:
+                await asyncio.sleep(self.download_retry_s)  # the sensor may still be saving or sending
+            try:
+                name = await self._last_file_name()
+                if not name or name == self._file_before:
+                    log.info("EVB Lite download fallback: no new file yet (last file %r)", name)
+                    continue
+                resp = await self._request("GET", rec.download_path,
+                                           timeout=httpx.Timeout(self.timeout_s, read=self._record_timeout_s()))
+            except SensorError as exc:
+                log.warning("EVB Lite download fallback attempt %d failed: %s", attempt + 1, exc)
+                continue
+            if resp.status_code < 400 and resp.content.strip():
+                log.info("EVB Lite: downloaded recording %s from %s (%d bytes)", name, rec.download_path, len(resp.content))
+                self._keep_raw_bytes(resp.content, resp.headers.get("content-type", ""))
+                return resp.content
+        return None
 
-    async def _run_recording(self) -> httpx.Response:
+    async def _run_recording(self) -> _Recording:
+        """The record request, read as a stream so that a transfer that is cut
+        off keeps the bytes that did arrive."""
         rec = self.profile.record
         assert rec is not None
+        client = self._ensure_client()
         # The response only arrives once the device has finished recording
         # and sent the file, so the read timeout covers the whole recording.
         timeout = httpx.Timeout(self.timeout_s, read=self._record_timeout_s())
+        out = _Recording()
+        t0 = time.monotonic()
+        chunks: list[bytes] = []
         try:
-            return await self._request("GET", rec.path, params=rec.query or None, timeout=timeout)
-        except SensorDisconnectedError as exc:
-            if isinstance(exc.__cause__, httpx.ReadTimeout):
-                raise SensorError(
-                    f"The EVB Lite recording did not finish within {self._record_timeout_s():g} s. Check the recording "
-                    "time in the sensor portal (Sensor Settings) or raise capture.record.timeout_s in the profile."
-                ) from exc
-            raise
+            async with client.stream("GET", rec.path, params=rec.query or None, timeout=timeout) as resp:
+                out.status = resp.status_code
+                out.content_type = resp.headers.get("content-type", "")
+                out.expected_bytes = int(resp.headers.get("content-length") or 0) or None
+                async for chunk in resp.aiter_bytes():
+                    chunks.append(chunk)
+        except httpx.ReadTimeout as exc:
+            raise SensorError(
+                f"The EVB Lite recording did not finish within {self._record_timeout_s():g} s. Check the recording "
+                "time in the sensor portal (Sensor Settings) or raise capture.record.timeout_s in the profile."
+            ) from exc
+        except (httpx.RemoteProtocolError, httpx.ReadError) as exc:
+            out.error = f"{type(exc).__name__}: {exc}"
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.WriteError, httpx.PoolTimeout) as exc:
+            self.last_http = {"path": rec.path, "error": f"{type(exc).__name__}: {exc}"}
+            raise SensorDisconnectedError(f"Cannot reach EVB Lite at {self.base_url}: {type(exc).__name__}") from exc
+        out.body = b"".join(chunks)
+        self.last_http = {"path": rec.path, "status": out.status, "bytes": len(out.body),
+                          "latency_ms": round((time.monotonic() - t0) * 1000, 1), "content_type": out.content_type,
+                          **({"error": out.error} if out.error else {})}
+        if out.error:
+            log.warning("EVB Lite record transfer ended abnormally after %d bytes (%s; expected %s bytes)",
+                        len(out.body), out.error, out.expected_bytes)
+        return out
 
     async def _cancel_recording(self) -> None:
         task, self._record_task = self._record_task, None
@@ -419,10 +558,27 @@ class EVBLiteAdapter:
             client = self._ensure_client()
             resp = await client.get(rec.progress_path, timeout=httpx.Timeout(self.timeout_s))
             # 400 {"error": "Data collection not in progress"} before the
-            # recording starts and after it ends.
+            # recording starts and after it ends. While the file is sent:
+            # {"sending": 0-100} (or a text progress).
             if resp.status_code == 200:
-                value = json_get(resp.json(), rec.progress_field)
+                data = resp.json()
+                if isinstance(data, dict) and isinstance(data.get("sending"), (int, float)) and (
+                        self._stop_requested or float(data.get(rec.progress_field, 0) or 0) >= 100):
+                    self.record_progress = 100.0
+                    self.record_sending = max(0.0, min(100.0, float(data["sending"])))
+                    return
+                value = json_get(data, rec.progress_field)
+                if isinstance(value, str):
+                    self.record_sending = self.record_sending or 0.0
+                    return
                 self.record_progress = max(0.0, min(100.0, float(value)))
+                if self._stop_requested and self.record_progress < 100 and not self._stop_resent and (
+                        now - self._stop_sent_at > 6.0):
+                    # Still recording 6 s after STOP: send it once more.
+                    self._stop_resent = True
+                    log.warning("EVB Lite still recording after stop; sending the stop request again")
+                    with contextlib.suppress(SensorError):
+                        await self.stop_recording()
         except Exception as exc:  # noqa: BLE001 — progress is informational only
             log.debug("EVB Lite progress poll failed: %s", exc)
 
@@ -435,42 +591,203 @@ class EVBLiteAdapter:
             return []
         self._record_task = None
         self._record_delivered = True
-        try:
-            resp = task.result()  # re-raises a failed or timed-out recording
-            failed = resp.status_code >= 400 or not resp.content.strip()
-        except SensorError:
-            if not self._stop_requested:
-                raise
-            resp, failed = None, True
-        if failed and self._stop_requested:
-            # After a stop, fall back to downloading the last recording.
-            fallback = await self._download_last_recording()
-            if fallback is not None:
-                resp = fallback
-                failed = False
-        if resp is None:
-            raise SensorError("The EVB Lite recording could not be downloaded after stopping.")
-        if failed and resp.status_code >= 400:
-            excerpt = resp.text[:200].strip()
+        result = task.result()  # re-raises a timed-out or unreachable recording
+        body = result.body
+        complete = result.error is None and result.status is not None and result.status < 400 and body.strip()
+        if result.status is not None and result.status >= 400 and not self._stop_requested:
+            excerpt = body[:200].decode("utf-8", errors="replace").strip()
             raise SensorError(
-                f"Record request {self.profile.record.path} failed with HTTP {resp.status_code}"
+                f"Record request {self.profile.record.path} failed with HTTP {result.status}"
                 + (f": {excerpt}" if excerpt else "")
             )
-        self._keep_raw(resp)
-        samples = self.parse_samples_payload(resp.content, resp.headers.get("content-type", ""))
+        if complete:
+            self._keep_raw_bytes(body, result.content_type)
+        else:
+            detail = result.error or f"HTTP {result.status}" if result.status else (result.error or "no response")
+            log.warning("EVB Lite recording transfer incomplete (%s, %d bytes); trying the saved file", detail, len(body))
+            saved = await self._download_last_recording()
+            if saved is not None:
+                body = saved
+                self.capture_flags.append({
+                    "code": "RECORDING_DOWNLOADED_SEPARATELY", "severity": "info",
+                    "message": f"The live transfer ended early ({detail}); the sensor's saved file was downloaded instead.",
+                })
+            else:
+                body = self._complete_lines(body)
+                if not body or body.count(b"\n") < 2:
+                    raise SensorError(
+                        f"The EVB Lite recording could not be downloaded ({detail}). The sensor keeps the last "
+                        "recording: download it in the sensor portal and use Operator → Data & export → Import CSV."
+                    )
+                self._keep_raw_bytes(body, result.content_type)
+                self.capture_flags.append({
+                    "code": "RECORDING_TRUNCATED", "severity": "warning",
+                    "message": f"The transfer from the sensor ended early ({detail}); only the samples that arrived "
+                               "were analyzed.",
+                })
+        samples = self.parse_samples_payload(body, result.content_type)
         if not samples:
             raise SensorError("The EVB Lite recording contained no samples.")
         self.record_progress = 100.0
         return samples
 
+    @staticmethod
+    def _complete_lines(body: bytes) -> bytes:
+        """Drop a cut-off last line (a partial number could be misread)."""
+        if not body or body.endswith(b"\n"):
+            return body
+        cut = body.rfind(b"\n")
+        return body[: cut + 1] if cut >= 0 else b""
+
+    # ------------------------------------------------------------ live view
+    @property
+    def live_supported(self) -> bool:
+        return self.profile.live is not None and bool(self.host)
+
+    @property
+    def live_running(self) -> bool:
+        return self._live_task is not None and not self._live_task.done()
+
+    @property
+    def live_rate_hz(self) -> float | None:
+        t = list(self._live_times)
+        if len(t) < 20:
+            return None
+        recent = [x for x in t if x >= t[-1] - 2_000_000_000]
+        span = recent[-1] - recent[0]
+        return (len(recent) - 1) * 1e9 / span if span > 0 and len(recent) >= 20 else None
+
+    @property
+    def live_url(self) -> str:
+        spec = self.profile.live
+        assert spec is not None
+        host = f"[{self.host}]" if ":" in self.host and not self.host.startswith("[") else self.host
+        return f"ws://{host}:{spec.port}{spec.path}"
+
+    async def start_live(self) -> None:
+        """Start the display-only live stream in the background."""
+        if not self.live_supported or self.live_running:
+            return
+        self.live_error = None
+        self._live_task = asyncio.create_task(self._live_loop(), name="evb-live")
+
+    async def stop_live(self) -> None:
+        task, self._live_task = self._live_task, None
+        ws = self._live_ws
+        self._live_stopping = True
+        if ws is not None and self.profile.live is not None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(ws.send(self.profile.live.stop_message), 1.0)
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(ws.close(), 1.5)  # clean close (1000)
+        if task is not None and not task.done():
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
+        self._live_ws = None
+
+    def drain_live(self) -> list[Sample]:
+        out = list(self._live_queue)
+        self._live_queue.clear()
+        return out
+
+    async def _live_loop(self) -> None:
+        from websockets.asyncio.client import connect  # bundled with uvicorn[standard]
+
+        spec = self.profile.live
+        assert spec is not None
+        self._live_pending = []
+        self._live_stopping = False
+        self.live_unit = None if spec.accel_unit == "auto" else spec.accel_unit
+        try:
+            async with connect(self.live_url, proxy=None, compression=None, ping_interval=None,
+                               open_timeout=self.timeout_s, close_timeout=1.0, max_queue=4096,
+                               user_agent_header="MissionMarsLab/1.0") as ws:
+                self._live_ws = ws
+                await ws.send(spec.start_message)
+                log.info("EVB Lite live view connected (%s)", self.live_url)
+                resent = False
+                while True:
+                    try:
+                        msg = await asyncio.wait_for(ws.recv(), LIVE_SILENCE_S)
+                    except asyncio.TimeoutError:
+                        if resent:
+                            raise SensorError(f"no live data from {self.live_url} after {spec.start_message}")
+                        resent = True
+                        await ws.send(spec.start_message)
+                        continue
+                    if self._live_message(msg):
+                        resent = False
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — the live view is optional
+            if not self._live_stopping:
+                self.live_error = f"{type(exc).__name__}: {exc}"
+                log.warning("EVB Lite live view stopped: %s", self.live_error)
+        finally:
+            self._live_ws = None
+
+    def _live_message(self, msg) -> bool:
+        """Parse one stream message. Returns True for a data sample."""
+        spec = self.profile.live
+        assert spec is not None
+        if isinstance(msg, (bytes, bytearray)):
+            msg = msg.decode("utf-8", errors="replace")
+        try:
+            m = json.loads(msg)
+        except ValueError:
+            return False
+        if not isinstance(m, dict) or m.get("type") == "status":
+            return False
+        f = spec.fields
+        try:
+            t = m[f["timestamp"]]
+            vals = [float(m[f[k]]) for k in ("ax", "ay", "az")]
+        except (KeyError, TypeError, ValueError):
+            return False
+        if not isinstance(t, (int, float)) or not all(math.isfinite(v) for v in vals):
+            return False
+        t_ns = int(round(float(t) * _TIME_TO_NS[spec.timestamp_unit]))
+        self._live_times.append(t_ns)
+        self.live_samples += 1
+        if self.live_unit is None:
+            # Decide the unit from the resting reading (≈1 g) before showing anything.
+            self._live_pending.append((t_ns, *vals))
+            unit = detect_accel_unit([math.sqrt(x * x + y * y + z * z) for _, x, y, z in self._live_pending[-200:]])
+            if unit is None and len(self._live_pending) < 600:
+                return True
+            if unit is None:
+                unit = self.profile.samples.accel_unit
+                log.warning("EVB Lite live view: unit not recognisable from the data; using %s", unit)
+            self.live_unit = unit
+            log.info("EVB Lite live view: acceleration unit detected as %s", unit)
+            pending, self._live_pending = self._live_pending, []
+            for p in pending:
+                self._live_queue.append(self._live_sample(*p))
+            return True
+        self._live_queue.append(self._live_sample(t_ns, *vals))
+        return True
+
+    def _live_sample(self, t_ns: int, x: float, y: float, z: float) -> Sample:
+        k = _UNIT_TO_G.get(str(self.live_unit).lower().replace("²", "2"), 1.0)
+        raw = {"x": x * k, "y": y * k, "z": z * k}
+        out = []
+        for axis in "xyz":
+            m = self.profile.axis_map.get(axis, f"+{axis}")
+            out.append((-1.0 if m[0] == "-" else 1.0) * raw[m[1]])
+        return Sample(t_ns, out[0], out[1], out[2], "evb_lite")
+
     # ---------------------------------------------------------------- parsing
     def _keep_raw(self, resp: httpx.Response) -> None:
+        self._keep_raw_bytes(resp.content, resp.headers.get("content-type", ""))
+
+    def _keep_raw_bytes(self, body: bytes, content_type: str) -> None:
         # Bounded safety net in case nobody drains (the capture service drains
         # every batch and applies the per-test size limit).
-        if self._raw_bytes + len(resp.content) > MAX_RAW_BYTES_PER_CAPTURE:
+        if self._raw_bytes + len(body) > MAX_RAW_BYTES_PER_CAPTURE:
             self.raw_payloads, self._raw_bytes = [], 0
-        self._raw_bytes += len(resp.content)
-        self.raw_payloads.append(RawPayloadRecord(now_ns(), resp.headers.get("content-type", ""), resp.content))
+        self._raw_bytes += len(body)
+        self.raw_payloads.append(RawPayloadRecord(now_ns(), content_type, body))
 
     def drain_raw_payloads(self) -> list[RawPayloadRecord]:
         out, self.raw_payloads, self._raw_bytes = self.raw_payloads, [], 0
