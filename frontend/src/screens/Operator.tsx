@@ -235,6 +235,24 @@ function SensorTab() {
           <Stat label="Samples" value={sensor.samples_received} />
           <Stat label="Failures" value={sensor.consecutive_failures} sub={sensor.next_retry_in_s != null ? `retry in ${sensor.next_retry_in_s}s` : undefined} />
         </div>
+        {sensor.capture_mode === "record" && sensor.sensor_settings && Object.keys(sensor.sensor_settings).length > 0 && (
+          <div className="mt-3 rounded-xl border border-space-600 p-3 text-sm">
+            <div className="mb-1 font-semibold">Sensor's own settings (read from the sensor)</div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-slate-300">
+              {sensor.sensor_settings.duration_s != null && <span>Max recording time {sensor.sensor_settings.duration_s} s</span>}
+              {sensor.sensor_settings.accel_range_g != null && (
+                <span className={sensor.sensor_settings.accel_range_g < 16 ? "text-amber-200" : undefined}>Range ±{sensor.sensor_settings.accel_range_g} g</span>
+              )}
+              {sensor.sensor_settings.sample_rate_hz != null && <span>Rate {sensor.sensor_settings.sample_rate_hz} Hz</span>}
+              {sensor.sensor_settings.gravity_comp != null && (
+                <span className={sensor.sensor_settings.gravity_comp ? "font-semibold text-red-300" : undefined}>
+                  Gravity compensation {sensor.sensor_settings.gravity_comp ? "ON: turn it off in the sensor portal" : "off"}
+                </span>
+              )}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">ARM TEST sets the max recording time to the app's "EVB Lite: max test length" (Analysis tab).</div>
+          </div>
+        )}
         {sensor.last_error && <div className="mt-3 rounded-lg bg-alert/10 px-3 py-2 text-sm text-red-200">Last error: {sensor.last_error}</div>}
         {sensor.stream_error && <div className="mt-2 rounded-lg bg-caution/10 px-3 py-2 text-sm text-amber-200">{sensor.stream_error}</div>}
         <div className="mt-3 flex gap-2">
@@ -717,6 +735,12 @@ function AnalysisTab({ settings, reload }: { settings: Record<string, unknown>; 
           <NumberField label="Post-trigger window (s)" value={settings.post_trigger_s} onSave={(v) => save({ post_trigger_s: v })} />
           <NumberField label="Baseline duration (s)" value={settings.baseline_s} onSave={(v) => save({ baseline_s: v })} />
           <NumberField label="Arm timeout (s)" value={settings.arm_timeout_s} onSave={(v) => save({ arm_timeout_s: v })} />
+          <NumberField
+            label="EVB Lite: max test length (s)"
+            value={settings.record_max_s}
+            onSave={(v) => save({ record_max_s: v })}
+            hint="The sensor stops by itself after this; STOP TEST ends it sooner. 0 = keep the sensor's own time."
+          />
           <NumberField label="Trigger: rise above rest (g)" value={settings.trigger_deviation_g} onSave={(v) => save({ trigger_deviation_g: v })} />
           <NumberField label="Trigger without free fall (g)" value={settings.trigger_without_freefall_g} onSave={(v) => save({ trigger_without_freefall_g: v })} hint="Higher = less sensitive to handling bumps" />
           <NumberField label="Min. impact peak (g)" value={detector.min_impact_peak_g ?? 2.5} onSave={(v) => saveDetector("min_impact_peak_g", v)} />

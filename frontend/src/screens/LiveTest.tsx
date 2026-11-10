@@ -41,10 +41,15 @@ export function LiveTest() {
   const canStudentHeight = sim && settings?.allow_student_height_change;
   const height = active && capture?.mission ? capture.mission.drop_height_m : (canStudentHeight && dropHeight) || settings?.drop_height_m || 0.2;
   const sensorReady = !!sensor?.connected && sensor.streaming_available !== false;
-  // Record mode (EVB Lite): the sensor records a fixed window per test and
-  // sends it when done, so there is no live graph and no CAPTURE/STOP.
+  // Record mode (EVB Lite): the sensor records the whole test and sends it
+  // when the operator presses STOP TEST (or at its maximum recording time),
+  // so there is no live graph and no CAPTURE.
   const record = !sim && sensor?.capture_mode === "record";
-  const progress = capture?.record_progress ?? null;
+  const canStop = record && capture?.record_can_stop !== false;
+  const stopping = record && !!capture?.record_stopping;
+  const elapsed = capture?.record_elapsed_s ?? null;
+  const maxS = capture?.record_max_s ?? sensor?.sensor_settings?.duration_s ?? null;
+  const stopTest = () => call(() => api.stop());
 
   useEffect(() => {
     setPreview(true);
@@ -92,6 +97,7 @@ export function LiveTest() {
         e.preventDefault();
         if (!active && sensorReady) arm();
         else if (state === "armed" && sim) release();
+        else if (state === "armed" && canStop && !stopping) stopTest();
       }
       if (e.key === "Escape" && active && state !== "analyzing") call(() => api.cancel());
     };
@@ -144,7 +150,7 @@ export function LiveTest() {
             <LiveChart
               rangeG={range}
               simulated={sim}
-              emptyText={record ? "The sensor records each drop. The graph appears when the recording has downloaded." : undefined}
+              emptyText={record ? "The sensor records the whole test. The graph appears after STOP TEST, when the recording has downloaded." : undefined}
             />
           </div>
         </div>
@@ -201,20 +207,29 @@ export function LiveTest() {
               RELEASE ▼ (SIMULATED DROP)
             </Button>
           )}
-          {state === "armed" && !sim && (
+          {state === "armed" && !sim && !stopping && (
             <div className="animate-pulse rounded-2xl border-2 border-mars bg-mars/15 p-5 text-center font-display text-2xl font-black tracking-widest text-mars">
               RELEASE THE LANDER!
             </div>
           )}
-          {state === "armed" && record && progress !== null && (
-            <div className="mt-3" aria-label={`Recording ${Math.round(progress)} percent`}>
-              <div className="mb-1 flex justify-between text-xs uppercase tracking-widest text-slate-400">
-                <span>Sensor recording</span>
-                <span className="font-mono">{Math.round(progress)}%</span>
-              </div>
-              <div className="h-3 overflow-hidden rounded-full bg-space-700">
-                <div className="h-full rounded-full bg-mars transition-[width] duration-300" style={{ width: `${Math.min(100, progress)}%` }} />
-              </div>
+          {state === "armed" && record && !stopping && (
+            <div className="mt-2 flex items-baseline justify-between text-sm text-slate-400">
+              <span>{canStop ? "Take your time. Press STOP TEST after it lands." : "The test ends when the sensor's recording time is over."}</span>
+              <span className="shrink-0 whitespace-nowrap pl-2 font-mono text-slate-200">
+                {elapsed !== null ? `${Math.floor(elapsed)} s` : ""}
+                {maxS ? <span className="text-slate-500"> / max {Math.round(maxS)} s</span> : null}
+              </span>
+            </div>
+          )}
+          {record && canStop && (state === "baseline" || state === "armed") && !stopping && (
+            <Button variant="primary" size="xl" className="mt-3 w-full font-display tracking-[0.25em]" disabled={busy} onClick={stopTest}>
+              STOP TEST ■
+            </Button>
+          )}
+          {stopping && (state === "baseline" || state === "armed") && (
+            <div className="flex flex-col items-center gap-2 py-4 text-center text-slate-300">
+              <div className="h-10 w-10 animate-spin rounded-full border-4 border-telemetry/30 border-t-telemetry" />
+              Stopping the sensor and downloading the recording…
             </div>
           )}
           {state === "triggered" && <div className="rounded-2xl bg-mars/20 p-5 text-center font-display text-3xl font-black text-mars">IMPACT!</div>}
@@ -226,10 +241,10 @@ export function LiveTest() {
           )}
 
           <div className="mt-4 grid grid-cols-3 gap-2">
-            <Button variant="ghost" size="md" disabled={record || !["baseline", "armed"].includes(state) || busy} onClick={() => call(() => api.trigger())} title={record ? "Not available: the sensor records a fixed window" : "Record the next window manually"}>
+            <Button variant="ghost" size="md" disabled={record || !["baseline", "armed"].includes(state) || busy} onClick={() => call(() => api.trigger())} title={record ? "Not needed: the sensor records the whole test" : "Record the next window manually"}>
               Capture
             </Button>
-            <Button variant="ghost" size="md" disabled={record || !["baseline", "armed", "triggered"].includes(state) || busy} onClick={() => call(() => api.stop())} title={record ? "Not available: the test ends when the recording finishes" : "Stop and analyze what was recorded"}>
+            <Button variant="ghost" size="md" disabled={(record && (!canStop || stopping)) || !["baseline", "armed", "triggered"].includes(state) || busy} onClick={stopTest} title="Stop and analyze what was recorded">
               Stop
             </Button>
             <Button variant="ghost" size="md" disabled={!active || state === "analyzing" || busy} onClick={() => call(() => api.cancel())}>
@@ -245,7 +260,7 @@ export function LiveTest() {
             {sim
               ? "Space = arm / release."
               : record
-                ? "Space = arm. The sensor records for the time set in its portal: release the lander when the screen says RELEASE."
+                ? "Space = arm, then Space again = stop test. Release the lander when the screen says RELEASE."
                 : "Space = arm. The operator releases the lander; the impact is detected automatically."}{" "}
             Esc = cancel.
           </p>

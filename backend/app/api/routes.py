@@ -424,6 +424,13 @@ def update_settings(body: dict, rt: Runtime = Depends(get_runtime)) -> dict:
         h = float(body["drop_height_m"])
         if not 0 < h <= 3:
             raise HTTPException(400, "drop_height_m must be between 0 and 3 m")
+    if "record_max_s" in body:
+        try:
+            m = float(body["record_max_s"])
+        except (TypeError, ValueError):
+            raise HTTPException(400, "record_max_s must be a number of seconds") from None
+        if not (m == 0 or 5 <= m <= 300):
+            raise HTTPException(400, "record_max_s must be 0 (use the sensor's setting) or between 5 and 300 s")
     try:
         res = rt.store.update(body)
     except KeyError as exc:

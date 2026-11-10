@@ -64,6 +64,10 @@ export interface SensorSnapshot {
   samples_received: number;
   capture_mode?: CaptureMode;
   record_progress?: number | null;
+  record_can_stop?: boolean;
+  record_max_s?: number | null;
+  /** The record-mode sensor's own settings, as it reports them. */
+  sensor_settings?: { duration_s?: number; accel_range_g?: number; gravity_comp?: boolean | null; sample_rate_hz?: number };
   battery_percent: number | null;
   detail: Record<string, unknown>;
   streaming_available: boolean;
@@ -94,6 +98,10 @@ export interface CaptureSnapshot {
   baseline: { magnitude_g: number; noise_std_g: number; stationary: boolean } | null;
   capture_mode?: CaptureMode;
   record_progress?: number | null;
+  record_elapsed_s?: number | null;
+  record_max_s?: number | null;
+  record_can_stop?: boolean;
+  record_stopping?: boolean;
   mission: {
     configuration_id: number;
     configuration_code: string;

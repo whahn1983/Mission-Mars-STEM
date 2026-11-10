@@ -24,7 +24,21 @@ export function ResultsChart({ series, peak, saturated, rangeG = 16 }: { series:
     view === "full" || m.peak_ms == null
       ? ["dataMin", "dataMax"]
       : [Math.max(series.t_ms[0] ?? -300, Math.min(-120, (m.freefall_start_ms ?? -150) - 40)), Math.min(series.t_ms[series.t_ms.length - 1] ?? 600, 450)];
-  const maxY = Math.max(4, Math.ceil(((saturated ? rangeG : peak ?? 4) * 1.15) / 2) * 2);
+  // Scale to the data, not to the sensor range: |a| combines three axes, so
+  // it can read above the per-axis limit (up to √3 × range when all clip).
+  const dataMax = useMemo(() => {
+    let mag = 0;
+    let axis = 0;
+    for (let i = 0; i < series.mag.length; i++) {
+      const v = series.mag[i];
+      if (v != null && v > mag) mag = v;
+      for (const a of [series.ax[i], series.ay[i], series.az[i]]) if (a != null && Math.abs(a) > axis) axis = Math.abs(a);
+    }
+    return { mag, axis };
+  }, [series]);
+  const top = Math.max(peak ?? 0, dataMax.mag, axes ? dataMax.axis : 0, saturated ? rangeG : 0, 3.5);
+  const maxY = Math.ceil((top * 1.1) / 2) * 2;
+  const minY = axes ? -Math.max(2, Math.ceil((dataMax.axis * 1.1) / 2) * 2) : 0;
 
   return (
     <div className="flex h-full flex-col">
@@ -60,7 +74,7 @@ export function ResultsChart({ series, peak, saturated, rangeG = 16 }: { series:
               tickFormatter={(v: number) => `${Math.round(v)}`}
               label={{ value: series.time_zero === "peak" ? "time from peak (ms)" : "time (ms)", position: "insideBottom", offset: -8, fill: "#64748b", fontSize: 12 }}
             />
-            <YAxis domain={[axes ? -Math.min(maxY, 8) : 0, maxY]} allowDataOverflow tick={{ fill: "#94a3b8", fontSize: 12 }} tickFormatter={(v: number) => `${v} g`} width={56} />
+            <YAxis domain={[minY, maxY]} allowDataOverflow tick={{ fill: "#94a3b8", fontSize: 12 }} tickFormatter={(v: number) => `${v} g`} width={56} />
             <Tooltip
               contentStyle={{ background: "#081127", border: "1px solid rgba(34,211,238,0.3)", borderRadius: 12 }}
               labelFormatter={(v) => `${Number(v).toFixed(1)} ms`}
@@ -73,7 +87,10 @@ export function ResultsChart({ series, peak, saturated, rangeG = 16 }: { series:
               <ReferenceArea x1={m.impact_start_ms} x2={m.impact_end_ms} fill="#f97316" fillOpacity={0.1} />
             )}
             <ReferenceLine y={1} stroke="#64748b" strokeDasharray="4 4" label={{ value: "1 g (at rest)", fill: "#64748b", fontSize: 11, position: "insideBottomRight" }} />
-            {saturated && <ReferenceLine y={rangeG} stroke="#ef4444" strokeDasharray="6 4" label={{ value: `sensor limit ${rangeG} g`, fill: "#fca5a5", fontSize: 12, position: "insideTopRight" }} />}
+            {saturated && (
+              <ReferenceLine y={rangeG} stroke="#ef4444" strokeDasharray="6 4" label={{ value: `per-axis limit ±${rangeG} g`, fill: "#fca5a5", fontSize: 12, position: "insideTopRight" }} />
+            )}
+            {saturated && axes && <ReferenceLine y={-rangeG} stroke="#ef4444" strokeDasharray="6 4" />}
             {!saturated && peak != null && m.peak_ms != null && <ReferenceLine x={m.peak_ms} stroke="#f97316" strokeDasharray="3 3" />}
             {(m.rebounds_ms ?? []).map((r, i) => (r != null ? <ReferenceLine key={i} x={r} stroke="#f59e0b" strokeDasharray="2 4" label={{ value: "rebound", fill: "#fcd34d", fontSize: 11, position: "top" }} /> : null))}
             {axes && <Line dataKey="ax" name="X" stroke="#f472b6" dot={false} strokeWidth={1.2} isAnimationActive={false} connectNulls={false} />}

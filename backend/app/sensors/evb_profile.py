@@ -43,8 +43,25 @@ class ControlRequest:
 
 
 @dataclass
+class DurationSetter:
+    """Request that sets the device's recording time: ``<method> <path>?<param>=<seconds>``."""
+
+    method: str
+    path: str
+    param: str
+    documented_in: str
+
+
+@dataclass
 class RecordSpec:
-    """A GET that records a fixed window on the device and returns it."""
+    """A GET that records a window on the device and returns it.
+
+    Optional extras: ``stop`` ends the recording early (the record request
+    then returns what was recorded); ``download_path`` fetches the last
+    recording if that response fails after a stop; ``settings_path`` is a
+    read-only GET of the device's recording settings; ``set_duration`` sets
+    the maximum recording time before each test.
+    """
 
     path: str
     documented_in: str
@@ -52,6 +69,11 @@ class RecordSpec:
     timeout_s: float = 120.0
     progress_path: str | None = None
     progress_field: str = "progress"
+    stop: ControlRequest | None = None
+    download_path: str | None = None
+    settings_path: str | None = None
+    settings_fields: dict = field(default_factory=dict)
+    set_duration: DurationSetter | None = None
 
 
 @dataclass
@@ -121,6 +143,8 @@ class EVBProfile:
             "capture_mode": self.capture_mode,
             "record_path": self.record.path if self.record else None,
             "record_timeout_s": self.record.timeout_s if self.record else None,
+            "record_can_stop": bool(self.record and self.record.stop),
+            "record_sets_duration": bool(self.record and self.record.set_duration),
             "streaming_ready": self.streaming_ready,
             "loaded_from": self.loaded_from,
             "problems": self.problems,
@@ -180,11 +204,44 @@ def _record(d: dict | None, problems: list[str]) -> RecordSpec | None:
         problems.append("capture.record.timeout_s must be between 5 and 900 seconds")
         ok = False
         timeout = 120.0
+    stop = None
+    if d.get("stop"):
+        stop = _control(d.get("stop"), "capture.record.stop", problems)
+        if stop is None:
+            ok = False
+        elif not stop.documented_in:
+            problems.append("capture.record.stop ends a recording on the device and requires 'documented_in'")
+            ok = False
+    download = d.get("download_path")
+    settings = d.get("settings") or {}
+    settings_path = settings.get("path")
+    for name, v in (("capture.record.download_path", download), ("capture.record.settings.path", settings_path)):
+        if v is not None and not str(v).startswith("/"):
+            problems.append(f"{name} must start with '/'")
+            ok = False
+    set_duration = None
+    sd = d.get("set_duration")
+    if sd:
+        m = str(sd.get("method", "POST")).upper()
+        sd_path, sd_param = sd.get("path"), str(sd.get("param") or "").strip()
+        sd_doc = str(sd.get("documented_in") or "").strip()
+        if m not in ALLOWED_CONTROL_METHODS or not sd_path or not str(sd_path).startswith("/") or not sd_param:
+            problems.append("capture.record.set_duration needs a GET/POST/PUT method, a path starting with '/' and a param")
+            ok = False
+        elif not sd_doc:
+            problems.append("capture.record.set_duration changes a device setting and requires 'documented_in'")
+            ok = False
+        else:
+            set_duration = DurationSetter(method=m, path=str(sd_path), param=sd_param, documented_in=sd_doc)
     if not ok:
         return None
     return RecordSpec(
         path=str(path), documented_in=doc, query=dict(d.get("query") or {}), timeout_s=timeout,
         progress_path=str(progress) if progress else None, progress_field=str(d.get("progress_field") or "progress"),
+        stop=stop, download_path=str(download) if download else None,
+        settings_path=str(settings_path) if settings_path else None,
+        settings_fields={k: v for k, v in dict(settings.get("fields") or {}).items() if v},
+        set_duration=set_duration,
     )
 
 
