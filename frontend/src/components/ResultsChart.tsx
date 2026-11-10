@@ -36,7 +36,7 @@ export function ResultsChart({ series, peak, saturated, rangeG = 16 }: { series:
     }
     return { mag, axis };
   }, [series]);
-  const top = Math.max(peak ?? 0, dataMax.mag, axes ? dataMax.axis : 0, saturated ? rangeG : 0, 3.5);
+  const top = Math.max(peak ?? 0, dataMax.mag, axes ? dataMax.axis : 0, saturated && axes ? rangeG : 0, 3.5);
   const maxY = Math.ceil((top * 1.1) / 2) * 2;
   const minY = axes ? -Math.max(2, Math.ceil((dataMax.axis * 1.1) / 2) * 2) : 0;
 
@@ -87,7 +87,8 @@ export function ResultsChart({ series, peak, saturated, rangeG = 16 }: { series:
               <ReferenceArea x1={m.impact_start_ms} x2={m.impact_end_ms} fill="#f97316" fillOpacity={0.1} />
             )}
             <ReferenceLine y={1} stroke="#64748b" strokeDasharray="4 4" label={{ value: "1 g (at rest)", fill: "#64748b", fontSize: 11, position: "insideBottomRight" }} />
-            {saturated && (
+            {/* The sensor limit applies to each axis, not to |a|: show it only with the X/Y/Z traces. */}
+            {saturated && axes && (
               <ReferenceLine y={rangeG} stroke="#ef4444" strokeDasharray="6 4" label={{ value: `per-axis limit ±${rangeG} g`, fill: "#fca5a5", fontSize: 12, position: "insideTopRight" }} />
             )}
             {saturated && axes && <ReferenceLine y={-rangeG} stroke="#ef4444" strokeDasharray="6 4" />}

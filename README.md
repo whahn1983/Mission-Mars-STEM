@@ -196,7 +196,7 @@ The container reports `healthy` when <http://localhost:8080/api/health> answers.
 docker compose cp app:/data/mars_lander.db .\backup.db
 ```
 
-* `measured_peak_g` is blank for invalid or saturated tests; `observed_max_g` is then only a lower bound.
+* `measured_peak_g` is blank for invalid tests; `observed_max_g` is then only a lower bound. Tests where an axis reached the ±16 g limit (`saturated`) keep their measured peak unless *Over-range makes a test invalid* is on.
 * No names or personal information are collected.
 
 ---

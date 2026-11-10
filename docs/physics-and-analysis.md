@@ -82,11 +82,15 @@ The EVB Lite range is ±16 g **per axis**.
 
 * A sample is **saturated** if **any single axis** reads ≥ 98 % of the range (|a_axis| ≥ 15.68 g).
 * Vector magnitude is deliberately not used for this. 12 g on X plus 12 g on Y gives |a| ≈ 17 g without clipping.
-* A saturated test:
+* By default (*Over-range makes a test invalid* off, `quality.saturation_invalidates = false`), a saturated test:
+  * gets the `SATURATED` **warning** and stays **valid**
+  * reports the measured |a| peak as usual. |a| combines all three axes, so it can be above 16 g, up to √3 × 16 ≈ 27.7 g when all three clip. Because an axis was cut off, the real peak may be a little higher; the report says so.
+  * is ranked like any other valid test, and counted as "over range" in comparisons
+  * this default fits the EVB Lite drops measured at the station (2026-11-10), which typically read 17–29 g
+* With *Over-range makes a test invalid* on (Operator → Analysis), a saturated test:
   * gets the `SATURATED` error flag and is **invalid**
-  * reports **no peak** (`measured_peak_g` is empty). The largest observed value is kept as `observed_max_g` and shown as "> 16 g".
+  * reports **no peak** (`measured_peak_g` is empty). The largest observed value is kept as `observed_max_g` and shown as "≥ X g · OVER SENSOR RANGE".
   * is **excluded from rankings** but still counted as "over range" in comparisons
-  * shows a warning to lower the drop height or add cushioning
 
 ## 6. Sampling and signal quality
 
@@ -127,7 +131,7 @@ The primary result is the **measured peak in g**. The simple mission outcome for
 |---|---|
 | Successful landing | valid **and** peak ≤ 8 g **and** mass ≤ 350 g **and** the operator did not mark "payload moved" or "tipped over" |
 | Needs improvement | valid but any criterion missed |
-| Invalid test — try again | not valid (no impact, saturated, data gaps, …) |
+| Invalid test — try again | not valid (no impact, data gaps, …; saturated only with *Over-range makes a test invalid* on) |
 
 Predictions:
 

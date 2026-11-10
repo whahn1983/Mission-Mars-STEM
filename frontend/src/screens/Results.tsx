@@ -156,7 +156,7 @@ export function Results() {
   return (
     <div className="grid min-h-full grid-cols-1 gap-5 p-5 2xl:h-full 2xl:grid-cols-[440px_1fr]">
       <div className="flex flex-col gap-4 [&>*]:shrink-0 2xl:min-h-0 2xl:overflow-auto">
-        <div className={`panel relative overflow-hidden p-5 text-center ${test.saturated ? "border-alert/60" : ""}`}>
+        <div className={`panel relative overflow-hidden p-5 text-center ${test.saturated && peak === null ? "border-alert/60" : ""}`}>
           {test.data_origin !== "physical" && (
             <div className={`mb-3 rounded-lg px-2 py-1 font-display text-[11px] font-bold tracking-[0.2em] ${test.data_origin === "simulated" ? "sim-stripes text-purple-100" : "bg-caution/20 text-amber-200"}`}>
               {ORIGIN_LABEL[test.data_origin]}
@@ -168,7 +168,11 @@ export function Results() {
               {shown.toFixed(1)}
               <span className="ml-2 text-5xl text-telemetry">g</span>
             </div>
-          ) : liveOnly ? (
+          ) : null}
+          {peak !== null && test.saturated && (
+            <div className="mt-1 text-xs text-amber-200/90">An axis reached the sensor's ±{range} g limit, so the real peak may be a little higher.</div>
+          )}
+          {peak !== null ? null : liveOnly ? (
             <div className="pop-in py-2">
               <div className="font-mono text-7xl font-black text-amber-200">≥ {test.observed_max_g!.toFixed(1)} g</div>
               <div className="mt-1 font-display text-lg tracking-widest text-amber-200">APPROXIMATE · LIVE STREAM</div>
@@ -225,7 +229,17 @@ export function Results() {
           {verdict && <div className={`mt-3 rounded-xl px-3 py-2 text-lg font-semibold ${verdict.good ? "bg-go/10 text-green-200" : "bg-space-850 text-slate-200"}`}>{verdict.text}</div>}
         </Panel>
 
-        {test.saturated && (
+        {test.saturated && peak !== null && (
+          <div className="rounded-2xl border border-caution/40 bg-caution/10 p-4 text-amber-100">
+            <div className="font-display text-sm tracking-widest">SENSOR LIMIT REACHED ON AN AXIS</div>
+            <p className="mt-1 text-sm">
+              The sensor measures each axis (X, Y, Z) up to ±{range} g, and {clippedAxes(a.saturation?.per_axis_counts)} reached that limit. The peak shown combines all
+              three axes, so it can be above {range} g. Because that axis was cut off at its limit, the real peak may be a little higher. Use{" "}
+              <i>X / Y / Z axes</i> on the graph to see it.
+            </p>
+          </div>
+        )}
+        {test.saturated && peak === null && (
           <div className="rounded-2xl border-2 border-alert/60 bg-red-950/40 p-4 text-red-100">
             <div className="font-display text-sm tracking-widest">⚠ SENSOR SATURATED</div>
             <p className="mt-1 text-sm">

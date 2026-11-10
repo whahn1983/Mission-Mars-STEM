@@ -6,7 +6,7 @@ import pytest
 
 from app.analysis.events import DetectorConfig, detect_impacts
 from app.analysis.outcome import ChallengeCriteria, compare_prediction, evaluate_outcome
-from app.analysis.pipeline import analyze_capture
+from app.analysis.pipeline import QualityConfig, analyze_capture
 from app.analysis.physics import impact_speed, potential_energy, physics_summary
 
 from .conftest import stationary
@@ -99,15 +99,24 @@ def test_require_freefall_option():
 
 
 # --- saturation ----------------------------------------------------------------------
-def test_clipped_fixture_is_flagged_and_not_reported_as_peak(fixture_csv):
+def test_clipped_fixture_reports_the_measured_peak_with_a_warning(fixture_csv):
     p = fixture_csv("clipped.csv")
     r = analyze_capture(p.t_ns, p.ax, p.ay, p.az, nominal_rate_hz=1600, range_g=16.0)
-    assert r.saturated
-    assert "SATURATED" in codes(r)
-    assert not r.valid
-    assert r.measured_peak_g is None, "a clipped value must never be reported as the true peak"
-    assert r.observed_max_g == pytest.approx(16.0)  # only a lower bound
+    assert r.saturated and r.valid, "over-range is a warning by default"
+    sat = next(f for f in r.flags if f.code == "SATURATED")
+    assert sat.severity == "warning" and "a little higher" in sat.message
+    assert r.measured_peak_g == pytest.approx(16.0), "the measured value is reported"
     assert r.saturation["per_axis_counts"]["z"] > 0
+
+
+def test_clipped_fixture_is_invalid_when_over_range_invalidates(fixture_csv):
+    p = fixture_csv("clipped.csv")
+    q = QualityConfig.from_dict({"saturation_invalidates": True})
+    r = analyze_capture(p.t_ns, p.ax, p.ay, p.az, nominal_rate_hz=1600, range_g=16.0, quality=q)
+    assert r.saturated and "SATURATED" in codes(r)
+    assert not r.valid
+    assert r.measured_peak_g is None, "in strict mode a clipped value is never reported as the true peak"
+    assert r.observed_max_g == pytest.approx(16.0)  # only a lower bound
 
 
 def test_large_vector_magnitude_without_axis_clipping_stays_valid():

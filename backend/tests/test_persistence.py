@@ -83,8 +83,8 @@ def test_comparison_uses_only_valid_measurements_and_never_mixes_origins(repo, f
 
     sim = repo.comparison(data_origin="simulated")
     foam = next(g for g in sim["groups"] if g["configuration_code"] == "B")
-    assert foam["total"] == 2 and foam["valid"] == 1 and foam["saturated"] == 1
-    assert foam["mean_peak_g"] == pytest.approx(8.0)
+    assert foam["total"] == 2 and foam["valid"] == 2 and foam["saturated"] == 1, "over-range is counted, and ranked"
+    assert foam["mean_peak_g"] == pytest.approx((8.0 + 16.0) / 2)
     rigid = next(g for g in sim["groups"] if g["configuration_code"] == "A")
     assert rigid["excluded"] == 1 and rigid["mean_peak_g"] is None
     assert [r["configuration_code"] for r in sim["ranking"]] == ["B"]
@@ -108,9 +108,9 @@ def test_tests_csv_export(repo, fixture_csv):
     rows = list(csv.DictReader(io.StringIO(export_tests_csv(repo.list_tests()))))
     assert len(rows) == 2
     clipped = next(r for r in rows if r["saturated"] == "true")
-    assert clipped["measured_peak_g"] == "" and clipped["valid"] == "false"
+    assert float(clipped["measured_peak_g"]) == pytest.approx(16.0) and clipped["valid"] == "true"
     assert "SATURATED" in clipped["quality_flags"]
-    ok = next(r for r in rows if r["valid"] == "true")
+    ok = next(r for r in rows if r["saturated"] == "false")
     assert float(ok["measured_peak_g"]) == pytest.approx(8.0)
     assert "name" not in "".join(rows[0].keys()).replace("configuration_name", ""), "no personal data columns"
 

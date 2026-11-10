@@ -6,7 +6,7 @@ import asyncio
 import numpy as np
 import pytest
 
-from app.analysis.pipeline import analyze_capture
+from app.analysis.pipeline import QualityConfig, analyze_capture
 from app.analysis.physics import MARS_GRAVITY
 from app.seed import DEFAULT_CONFIGURATIONS
 from app.sensors.base import samples_to_arrays
@@ -66,7 +66,11 @@ def test_rigid_high_drop_saturates_sensor():
     assert tr.true_peak_g > 16.0
     assert np.max(np.abs(tr.az)) == pytest.approx(16.0)  # clipped at full scale
     r = peak(tr)
-    assert r.saturated and r.measured_peak_g is None and not r.valid
+    assert r.saturated and r.valid, "over-range is reported with a warning by default"
+    assert 16.0 <= r.measured_peak_g < tr.true_peak_g, "the reported value is a lower bound"
+    strict = analyze_capture(tr.t_ns, tr.ax, tr.ay, tr.az, nominal_rate_hz=1600, simulated=True,
+                             quality=QualityConfig(saturation_invalidates=True))
+    assert strict.saturated and strict.measured_peak_g is None and not strict.valid
 
 
 def test_elastic_landing_rebounds():
