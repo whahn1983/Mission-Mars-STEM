@@ -53,6 +53,7 @@ from .base import (
     AdapterInfo,
     RawPayloadRecord,
     Sample,
+    SensorBusyError,
     SensorDisconnectedError,
     SensorError,
     SensorNotConfiguredError,
@@ -126,9 +127,9 @@ class EVBLiteAdapter:
         self._last_progress_poll = 0.0
         self.record_progress: float | None = None
         self.record_started_at: float | None = None
-        # Maximum recording time to set on the device before each test
+        # Recording time (test window) to set on the device before each test
         # (seconds; None or 0 = leave the device's own setting alone).
-        self.record_max_s: float | None = None
+        self.record_window_s: float | None = None
         self.sensor_settings: dict = {}
         self._stop_requested = False
         self._stop_sent_at = 0.0
@@ -389,6 +390,23 @@ class EVBLiteAdapter:
             self.info.accel_range_g = self.range_g
         return out
 
+    BUSY_MESSAGE = ("The sensor is still busy with an earlier recording (from the app or its own portal). "
+                    "Wait until it finishes, at most one test length, and press ARM TEST again.")
+
+    async def _check_not_busy(self) -> None:
+        """Refuse to start while the sensor reports a recording in progress
+        (its /start would answer 400 "Data collection in progress")."""
+        rec = self.profile.record
+        if rec is None or not rec.progress_path:
+            return
+        try:
+            resp = await self._request("GET", rec.progress_path)
+        except SensorError as exc:
+            log.debug("Busy check failed: %s", exc)
+            return
+        if resp.status_code == 200:
+            raise SensorBusyError(self.BUSY_MESSAGE)
+
     async def _last_file_name(self) -> str | None:
         rec = self.profile.record
         if rec is None or not rec.file_info_path:
@@ -416,7 +434,8 @@ class EVBLiteAdapter:
                 "Gravity Compensation is ON in the sensor portal. Turn it off (sensor portal → Sensor Settings): "
                 "the analysis needs the 1 g reading of the lander at rest."
             )
-        want = float(self.record_max_s or 0)
+        await self._check_not_busy()
+        want = float(self.record_window_s or 0)
         if rec.set_duration and want > 0 and settings.get("duration_s") != want:
             sd = rec.set_duration
             resp = await self._request(sd.method, sd.path, params={sd.param: f"{want:g}"})
@@ -596,6 +615,8 @@ class EVBLiteAdapter:
         complete = result.error is None and result.status is not None and result.status < 400 and body.strip()
         if result.status is not None and result.status >= 400 and not self._stop_requested:
             excerpt = body[:200].decode("utf-8", errors="replace").strip()
+            if "in progress" in excerpt.lower():
+                raise SensorBusyError(self.BUSY_MESSAGE)
             raise SensorError(
                 f"Record request {self.profile.record.path} failed with HTTP {result.status}"
                 + (f": {excerpt}" if excerpt else "")
@@ -603,7 +624,10 @@ class EVBLiteAdapter:
         if complete:
             self._keep_raw_bytes(body, result.content_type)
         else:
-            detail = result.error or f"HTTP {result.status}" if result.status else (result.error or "no response")
+            detail = result.error or (f"HTTP {result.status}" if result.status else "no response")
+            excerpt = body[:120].decode("utf-8", errors="replace").strip()
+            if result.status and result.status >= 400 and excerpt:
+                detail += f": {excerpt}"
             log.warning("EVB Lite recording transfer incomplete (%s, %d bytes); trying the saved file", detail, len(body))
             saved = await self._download_last_recording()
             if saved is not None:

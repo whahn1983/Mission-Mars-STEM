@@ -1,9 +1,10 @@
 {
   "_readme": [
     "EVB Lite protocol profile, filled in from the physical sensor EVBS_V1F9L on 2026-11-10.",
-    "Record mode: ARM TEST sets the sensor's maximum recording time (Operator -> Analysis ->",
-    "'EVB Lite: max test length') and sends the portal's Record request; STOP TEST sends the",
-    "portal's Stop request and the sensor returns the recording as CSV.",
+    "Record mode with a fixed window: ARM TEST sets the sensor's recording time to",
+    "Operator -> Analysis -> 'EVB Lite: test length' (default 10 s) and sends the portal's",
+    "Record request; the sensor records for that long and returns the recording as CSV.",
+    "The live stream drives the on-screen graph (display only).",
     "Evidence: docs/evb-lite-evidence/ and the portal script /js/index.js (inspected, not stored).",
     "Integration notes: docs/evb-lite-integration.md."
   ],
@@ -43,11 +44,7 @@
       "timeout_s": 120,
       "progress_path": "/progress",
       "progress_field": "progress",
-      "stop": {
-        "method": "GET",
-        "path": "/stop",
-        "documented_in": "EVident Vibration Sensor User Manual §6.2 (Stop button); portal script /js/index.js handleUniversalStop"
-      },
+      "_stop_comment": "The portal's GET /stop (handleUniversalStop) is deliberately not used: on the real sensor (2026-11-10) the record request answered HTTP 400 after it, no new file was saved, and the sensor then reported 'Data collection in progress'. Tests use a fixed window instead. To try it again, add \"stop\": {\"method\": \"GET\", \"path\": \"/stop\", \"documented_in\": \"…\"}.",
       "download_path": "/csv",
       "file_info_path": "/file_info",
       "settings": {

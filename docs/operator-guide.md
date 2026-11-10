@@ -15,7 +15,7 @@ Open the **operator dashboard** with **Ctrl+Shift+O**, the faint ⚙ in the top-
    * Enable only the presets that physically exist.
    * Weigh each complete lander and enter the mass in grams.
    * Optionally upload a photo of each one.
-5. **Sensor:** follow `docs/hardware-integration-checklist.md`. The EVB Lite runs in **record mode** (`config/evb_profile.json`): ARM TEST starts a recording on the sensor, and **STOP TEST** ends it. You do not need to set the recording time in the portal: ARM TEST sets it to **Operator → Analysis → EVB Lite: max test length** (default 60 s), which is only the limit if nobody presses STOP. In the sensor's own portal (`http://<sensor-ip>/`) → **Sensor Settings**, check:
+5. **Sensor:** follow `docs/hardware-integration-checklist.md`. The EVB Lite runs in **record mode** (`config/evb_profile.json`): ARM TEST starts a recording of a fixed length, and the screen counts down. You do not need to set the recording time in the portal: ARM TEST sets it to **Operator → Analysis → EVB Lite: test length** (default **10 s**). In the sensor's own portal (`http://<sensor-ip>/`) → **Sensor Settings**, check:
    * **Accel Range ±16 g**, **Accelerometer** on, and **Gravity Compensation off**. The analysis needs the 1 g resting reading; the app refuses to arm while gravity compensation is on. Operator → Sensor shows what the sensor reports.
    * Sampling frequency **≈ 1.6 kHz** (the sensor delivered 1,754 Hz). Higher rates make each download much slower: the sensor sends about 110 KB/s, so 10 s at 1.7 kHz takes about 5 s to arrive after STOP, and 10 s at 6.6 kHz about 20 s.
    * Then Operator → Sensor → mode **EVB Lite**, **Reload EVB profile**. The profile badge should say *record mode ready*.
@@ -36,7 +36,7 @@ Open the **operator dashboard** with **Ctrl+Shift+O**, the faint ⚙ in the top-
 | Briefing | Picks a grade band, presses **START MISSION** | — |
 | Design | Chooses landing gear A–D, rotates the 3D model, toggles X-ray to see the payload | Fits the matching physical landing gear to the lander |
 | Predict | Gentle / Medium / Hard (1–4), a g range (5–8) or a number (9–12) | — |
-| Test | Presses **ARM TEST** (or Space), watches the live graph | Holds the lander still on the release point. When the screen says **RELEASE THE LANDER!**, the child can take their time. After the landing (visible on the live graph), press **STOP TEST** (or Space). The report appears a few seconds later, once the recording has downloaded. In simulation the student presses **RELEASE (SIMULATED DROP)** |
+| Test | Presses **ARM TEST** (or Space), watches the live graph | Holds the lander still on the release point. When the screen says **RELEASE THE LANDER!**, the child releases it before the countdown ends (about 9 s). The screen then shows **LANDING DETECTED ✓**. When the countdown ends, the report appears a few seconds later, once the recording has downloaded. In simulation the student presses **RELEASE (SIMULATED DROP)** |
 | Results | Sees the peak g, graph and outcome | Optional: mark *Landed upright?* / *Payload stayed in place?* (the yellow OPERATOR strip appears while you are unlocked) |
 | Improve | Compares designs, tries another | Swaps the gear |
 
@@ -52,10 +52,12 @@ The screen returns to the briefing automatically after 2 minutes of inactivity (
 | "Sensor unavailable" | Operator → Sensor → **Switch to simulation now**. Results are then clearly labeled *simulated*. Fix the sensor during a quiet moment and switch back |
 | Sensor reconnecting | It retries automatically with backoff (1, 2, 4 … 30 s). **Connect / retry now** forces an immediate attempt |
 | Readings over range | Lower the drop height or put the rigid design last. Over-range tests are flagged and not ranked |
-| "No valid impact" with the EVB Lite | STOP TEST was pressed before the landing, or the test reached the max test length first. Raise *EVB Lite: max test length* if needed |
+| "No valid impact" with the EVB Lite | The drop happened after the countdown ended. Release sooner, or raise *EVB Lite: test length* |
+| "The sensor is still busy with an earlier recording" | A recording from a cancelled test or from the sensor portal is still running. Wait one test length and press ARM again |
+| Report says **≥ X g · APPROXIMATE · LIVE STREAM** | The recording could not be downloaded, so the result comes from the live stream, which is too sparse to measure the peak. It is not ranked; repeat the drop |
 | "Gravity Compensation is ON" when arming | Sensor portal → Sensor Settings → disable Gravity Compensation, then ARM again |
 | Live graph stays empty on the Live Test screen | Operator → Sensor → *Live view* shows why. Tests still work without it: the full graph is in the report. Close other browser tabs that show the sensor portal's live stream |
-| An error on STOP TEST, or a note *"the sensor's saved file was downloaded instead"* | The sensor broke the connection while sending the file; the app downloads the saved file instead. If a test still fails, `docker compose logs app` shows the exact request. The file is also on the sensor: portal → File Manager → Download, then Operator → Data & export → Import CSV |
+| A download error, or a note *"the sensor's saved file was downloaded instead"* | The sensor broke the connection while sending the file; the app downloads the saved file instead. If a test still fails, `docker compose logs app` shows the exact request. The file is also on the sensor: portal → File Manager → Download, then Operator → Data & export → Import CSV |
 | Report says **≥ 19.6 g, OVER SENSOR RANGE** | An axis hit the sensor's ±16 g limit. The graph shows \|a\|, the three axes combined, which can read above 16 g; the real peak was at least the number shown. Lower the drop height or add cushioning |
 | App not loading | `docker compose ps`; `docker compose restart`; see README troubleshooting |
 

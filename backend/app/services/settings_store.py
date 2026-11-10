@@ -15,6 +15,9 @@ from ..seed import DEFAULT_SETTINGS, ensure_settings
 SENSOR_KEYS = ("sensor_mode", "evb_host", "evb_port", "evb_timeout_s")
 # Settings edited on the operator dashboard's System tab (they mirror .env).
 SYSTEM_KEYS = SENSOR_KEYS + ("evb_accel_range_g", "sim_sample_rate_hz", "log_level")
+# Settings from earlier versions, removed on load. record_max_s (60 s, "until
+# STOP TEST") became record_window_s (10 s fixed window).
+OBSOLETE_KEYS = ("record_max_s",)
 
 
 def env_defaults(env: Settings) -> dict:
@@ -51,6 +54,12 @@ class SettingsStore:
         with self.db.session() as s:
             ensure_settings(s)
             rows = {r.key: r.value_json for r in s.scalars(select(SettingRow)).all()}
+            for k in OBSOLETE_KEYS:
+                if k in rows:
+                    row = s.get(SettingRow, k)
+                    if row is not None:
+                        s.delete(row)
+                    rows.pop(k)
             for k, v in self.defaults.items():
                 if k not in rows:
                     s.add(SettingRow(key=k, value_json=v))

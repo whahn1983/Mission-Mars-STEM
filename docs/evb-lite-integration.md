@@ -2,12 +2,13 @@
 
 This document tracks what is **known**, what is **assumed from a related product**, what has been **observed on the real device**, and what is **still unknown** about the EVident Battery **EVB Lite** Wi-Fi accelerometer. It also contains the step-by-step procedure for integrating the sensor when it arrives.
 
-> **Status (2026-11-10): record mode verified, with STOP TEST.** Evidence from sensor `EVBS_V1F9L` is in §3 and `docs/evb-lite-evidence/`: the portal's traffic (HAR), a real recording, and the portal's own script `/js/index.js`. `config/evb_profile.json` drives **record mode** (Path B, automated):
+> **Status (2026-11-10): record mode with a fixed window.** Evidence from sensor `EVBS_V1F9L` is in §3 and `docs/evb-lite-evidence/`: the portal's traffic (HAR), a real recording, and the portal's own script `/js/index.js`. `config/evb_profile.json` drives **record mode** (Path B, automated):
 >
-> * **ARM TEST** sets the sensor's maximum recording time (Operator → Analysis → *EVB Lite: max test length*, default 60 s) and sends the portal's Record request.
-> * The test stays armed until the operator presses **STOP TEST**. That sends the portal's Stop request, and the sensor returns the recording, which the app analyzes.
+> * **ARM TEST** sets the sensor's recording time (Operator → Analysis → *EVB Lite: test length*, default 10 s) and sends the portal's Record request.
+> * The screen counts down. The sensor ends the recording by itself and returns it, and the app analyzes it.
+> * The portal's Stop request is **not used**: on the real sensor it lost the recording (§3).
 >
-> The live graph on the Live Test screen uses the portal's own WebSocket stream (display only; see *Live view* below). The sensor's own CSV files are also recognized by the importer. No endpoint is hard-coded in the application code; everything comes from the profile.
+> The live graph on the Live Test screen uses the portal's own WebSocket stream. It is display only (about 59 Hz on the real sensor), but it is also used to show "landing detected" and, if a recording is lost, an approximate "at least X g" result (see *Live view* below). The sensor's own CSV files are also recognized by the importer. No endpoint is hard-coded in the application code; everything comes from the profile.
 
 ---
 
@@ -83,7 +84,8 @@ Evidence from 2026-11-10 (operator capture of sensor `EVBS_V1F9L`):
 | Timestamp resolution | 1 µs units; every step exactly 570 µs, all distinct | CSV | 2026-11-10 |
 | Effective sample rate actually delivered | **1,754 Hz** (1,752 samples in 1.0 s, no gaps) | CSV | 2026-11-10 |
 | Live (streaming) vs record-then-download | Record-then-download is used for measurements. The live WebSocket stream (above) feeds the on-screen graph only; its unit is detected from the resting reading, and the rate it delivers is shown in Operator → Sensor | HAR + portal script | 2026-11-10 |
-| Reply to `/stop` and the file transfer after it | First test on the real sensor (2026-11-10) ended with `RemoteProtocolError` on STOP: the sensor closed a connection without a complete HTTP reply. The portal ignores errors from its own `/stop` call. Which request it was is not yet known; the app now logs it (§6, Path B notes) | operator report | 2026-11-10 |
+| Reply to `/stop` and the file transfer after it | First test on the real sensor (2026-11-10) ended with `RemoteProtocolError` on STOP: the sensor closed a connection without a complete HTTP reply. With the tolerant stop, the next test got **HTTP 400** on the record request after `/stop`, and no new file was saved. Afterwards the portal's own Record answered *"Data collection in progress"*. **Stop is therefore not used**; tests use a fixed window | operator reports | 2026-11-10 |
+| Live stream rate on the real sensor | **≈ 59 Hz** (Operator → Sensor → Live view). Enough to see the drop and detect the landing, too sparse to measure the peak (see *Live view*) | operator screenshot | 2026-11-10 |
 | Can range/rate be set programmatically (documented?) | Yes, through the portal's own requests (above). The app only sets the **recording time**; range, rate and gravity compensation are read and checked, not changed | portal script | 2026-11-10 |
 | Range in use | ±16 g: value steps of 0.0047 m/s² = 0.48 mg match the manual's 0.488 mg resolution at ±16 g | CSV | 2026-11-10 |
 | Behaviour at ±16 g (flat clipping? wraps? flags?) | not tested yet | | |
@@ -241,16 +243,19 @@ What the adapter does with the profile (`backend/app/sensors/evb_lite.py`):
 The `samples` section then describes the recording's format (`"format": "csv"`, `csv.columns`, `timestamp_unit`, `accel_unit`). What happens on **ARM TEST** (`EVBLiteAdapter` record mode + `CaptureService`):
 
 1. The app reads `/settings`. If **gravity compensation is on**, it refuses to arm and says so, because the analysis needs the 1 g resting reading. The reported `accel_range` becomes the saturation limit.
-2. If the sensor's recording time differs from *EVB Lite: max test length* (default 60 s; 0 = leave it alone), the app sets it with `POST /duration?value=…`. This is the only setting the app changes. It exists because the portal saves the box only on Enter or focus loss, which is easy to miss.
-3. The app sends the record request.
-4. *Baseline*: "hold the lander still" until `/progress` shows that the recording has started, plus `baseline_s` (0.4 s).
-5. *Armed*: **RELEASE THE LANDER!** with a seconds counter. This stays as long as needed.
-6. **STOP TEST** (or Space) sends `GET /stop`. The sensor ends the recording and the open `/start` request delivers it. If that response fails, the app downloads `/csv` instead. If nobody presses STOP, the test ends at the maximum recording time.
-7. The CSV is kept verbatim as the test's raw payload and analyzed as a whole. The impact is found by the analysis, as for a CSV import.
+2. If `/progress` says a recording is still running (from an earlier test or the portal), the app refuses to arm and says so: "The sensor is still busy…". It does the same if `/start` answers "Data collection in progress".
+3. If the sensor's recording time differs from *EVB Lite: test length* (default 10 s; 0 = leave it alone), the app sets it with `POST /duration?value=…`. This is the only setting the app changes. It exists because the portal saves the box only on Enter or focus loss, which is easy to miss.
+4. The app sends the record request.
+5. *Baseline*: "hold the lander still" until `/progress` shows that the recording has started, plus `baseline_s` (0.4 s).
+6. *Armed*: **RELEASE THE LANDER!** with a countdown of the window. When the live stream shows a free fall (≥ `freefall_min_ms`, 40 ms) followed by contact, the screen switches to **LANDING DETECTED ✓** and counts down to the end of the recording.
+7. When the window ends, the sensor returns the recording. The CSV is kept verbatim as the test's raw payload and analyzed as a whole. The impact is found by the analysis, as for a CSV import.
+
+With a `stop` request in the profile (not in the shipped one), the test instead stays armed until **STOP TEST**, which sends it. That code path is kept for a future firmware whose Stop keeps the recording.
 
 Notes:
 * The live preview never starts a recording, and CAPTURE is not available in this mode.
-* **Cancel** also sends `/stop`, so the sensor is not left recording.
+* **Cancel** abandons the test. Without a `stop` request, the sensor finishes its window by itself, at most one test length; ARM refuses until then.
+* **Recording lost, landing seen.** If the recording cannot be downloaded after the live stream showed a landing, the live samples are saved instead. The report says **"≥ X g · APPROXIMATE · LIVE STREAM"**, the test is flagged `LIVE_STREAM_ONLY` (error) and `LOW_SAMPLE_RATE`, it is invalid, and it is never ranked. Without a landing, the test ends with the error.
 * **Tolerant stop.** The sensor may answer `/stop`, or the file transfer after it, with a broken HTTP reply (`RemoteProtocolError`).
   * A `/stop` without a proper reply counts as sent, as in the portal.
   * If the sensor still reports recording progress 6 s later, the stop is sent once more.

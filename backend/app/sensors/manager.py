@@ -80,6 +80,8 @@ class SensorManager:
         self._capture_wants_stream = False
         self._stream_block_until = 0.0
         self._listeners: list[Callable[[list[Sample]], None]] = []
+        # Display-only live samples (never analyzed as a measurement).
+        self._live_listeners: list[Callable[[list[Sample]], None]] = []
         self._event_listeners: list[Callable[[str, dict], None]] = []
         self._rate_window: deque[int] = deque(maxlen=8000)
         self._telemetry: list[list] = []
@@ -124,6 +126,9 @@ class SensorManager:
 
     def add_listener(self, cb: Callable[[list[Sample]], None]) -> None:
         self._listeners.append(cb)
+
+    def add_live_listener(self, cb: Callable[[list[Sample]], None]) -> None:
+        self._live_listeners.append(cb)
 
     def add_event_listener(self, cb: Callable[[str, dict], None]) -> None:
         self._event_listeners.append(cb)
@@ -297,8 +302,8 @@ class SensorManager:
         wanted = self._capture_wants_stream or (self.hub.preview_requested and preview_ok)
         if wanted and not self.streaming and now >= self._stream_block_until:
             try:
-                if hasattr(self.adapter, "record_max_s"):
-                    self.adapter.record_max_s = float(self.store.get("record_max_s") or 0)
+                if hasattr(self.adapter, "record_window_s"):
+                    self.adapter.record_window_s = float(self.store.get("record_window_s") or 0)
                 await self.adapter.start_capture()
                 self.streaming = True
                 self.stream_error = None
@@ -366,6 +371,11 @@ class SensorManager:
         if pts:
             self._last_live_at = now
             self._accumulate_telemetry(pts)
+            for cb in self._live_listeners:
+                try:
+                    cb(pts)
+                except Exception:  # noqa: BLE001
+                    log.exception("Live listener failed")
 
     async def _try_connect(self) -> None:
         self.state = ConnectionState.CONNECTING
@@ -505,7 +515,7 @@ class SensorManager:
             "capture_mode": info.capture_mode,
             "record_progress": _f(getattr(self.adapter, "record_progress", None), 1),
             "record_can_stop": self.record_can_stop(),
-            "record_max_s": float(self.store.get("record_max_s") or 0) or None,
+            "record_window_s": float(self.store.get("record_window_s") or 0) or None,
             "sensor_settings": dict(getattr(self.adapter, "sensor_settings", {}) or {}),
             "battery_percent": d.get("battery_percent"),
             "detail": {k: v for k, v in d.items() if isinstance(v, (str, int, float, bool)) or v is None},

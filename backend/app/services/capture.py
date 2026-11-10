@@ -18,10 +18,15 @@ Record-mode sensors (``AdapterInfo.capture_mode == "record"``, e.g. the EVB
 Lite) record on the device and deliver the recording in one batch when it
 ends. For them, ARM starts the recording; BASELINE lasts until the device
 reports that it is recording plus ``baseline_s``; ARMED tells the students to
-release and stays until the operator presses STOP (which ends the recording
-on the device) or the sensor reaches its maximum recording time; the
-delivered recording is analyzed as a whole (the impact is found by the
-analysis, as for a CSV import). CAPTURE is not available in that mode.
+release and shows a countdown of the test window (the sensor's recording
+time); the delivered recording is analyzed as a whole (the impact is found by
+the analysis, as for a CSV import). If the sensor profile has a working stop
+request, STOP ends the window early. CAPTURE is not available in that mode.
+
+The sensor's display-only live stream is watched during the window to tell
+the students "landing detected". If the recording then cannot be downloaded,
+the live samples are saved instead as an approximate, invalid result
+("at least X g"), so the test is not lost; it is never ranked.
 """
 
 from __future__ import annotations
@@ -38,7 +43,7 @@ import numpy as np
 
 from ..analysis.events import DetectorConfig
 from ..analysis.physics import EARTH_GRAVITY, MARS_GRAVITY
-from ..analysis.pipeline import QualityConfig, analyze_capture
+from ..analysis.pipeline import Flag, QualityConfig, analyze_capture
 from ..sensors.base import Sample, now_ns, samples_to_arrays
 from ..sensors.manager import SensorManager
 from .hub import Hub
@@ -120,9 +125,14 @@ class CaptureService:
         self.sim_drop: dict | None = None
         self._record_mode = False
         self._record_running_since: float | None = None
-        self._last_progress_shown: tuple | None = None
+        self._last_progress_shown: str | None = None
         self._record_stopping = False
+        # Live stream (display only) seen during a record-mode test.
+        self._live_buffer: deque[Sample] = deque(maxlen=40_000)
+        self._live_ff_start: int | None = None
+        self.landing_seen = False
         manager.add_listener(self._on_samples)
+        manager.add_live_listener(self._on_live_samples)
         manager.add_event_listener(self._on_sensor_event)
 
     # ------------------------------------------------------------ lifecycle
@@ -154,7 +164,8 @@ class CaptureService:
             "record_elapsed_s": round(time.monotonic() - self._record_running_since, 1) if (
                 self._record_mode and self._record_running_since and self.state in (
                     CaptureState.BASELINE, CaptureState.ARMED)) else None,
-            "record_max_s": self._record_max_s() if self._record_mode else None,
+            "record_window_s": self._record_window_s() if self._record_mode else None,
+            "landing_seen": self.landing_seen,
             "record_can_stop": self.manager.record_can_stop() if self._record_mode else False,
             "record_stopping": self._record_stopping,
             "mission": None if m is None else {
@@ -174,7 +185,7 @@ class CaptureService:
         v = getattr(self.manager.adapter, "record_progress", None)
         return None if v is None else round(float(v), 1)
 
-    def _record_max_s(self) -> float | None:
+    def _record_window_s(self) -> float | None:
         settings = getattr(self.manager.adapter, "sensor_settings", None) or {}
         v = settings.get("duration_s")
         return None if v is None else float(v)
@@ -366,6 +377,9 @@ class CaptureService:
         self.sim_drop = None
         self._raw_bytes = 0
         self._raw_truncated = False
+        self._live_buffer.clear()
+        self._live_ff_start = None
+        self.landing_seen = False
         adapter = self.manager.adapter
         if hasattr(adapter, "drain_raw_payloads"):
             adapter.drain_raw_payloads()
@@ -423,6 +437,32 @@ class CaptureService:
             post = float(self.mission.settings.get("post_trigger_s", 1.5)) if self.mission else 1.5
             if self.trigger_ns is not None and samples[-1].timestamp_ns >= self.trigger_ns + int(post * 1e9):
                 self._start_finalize(reason="post-trigger window complete")
+
+    def _on_live_samples(self, samples: list[Sample]) -> None:
+        """Display-only live stream during a record-mode test: kept as a
+        fallback and watched for the landing (free fall, then contact)."""
+        if not self._record_mode or self.state not in (CaptureState.BASELINE, CaptureState.ARMED):
+            return
+        self._live_buffer.extend(samples)
+        if self.state != CaptureState.ARMED or self.landing_seen:
+            return
+        det = DetectorConfig.from_dict((self.mission.settings if self.mission else {}).get("detector"))
+        for smp in samples:
+            if None in (smp.ax_g, smp.ay_g, smp.az_g):
+                continue
+            m = math.sqrt(smp.ax_g**2 + smp.ay_g**2 + smp.az_g**2)
+            if m < det.freefall_threshold_g:
+                if self._live_ff_start is None:
+                    self._live_ff_start = smp.timestamp_ns
+            elif self._live_ff_start is not None:
+                fell_ms = (smp.timestamp_ns - self._live_ff_start) / 1e6
+                self._live_ff_start = None
+                if fell_ms >= det.freefall_min_ms:
+                    self.landing_seen = True
+                    self._last_progress_shown = None  # refresh the countdown message
+                    self.message = "LANDING DETECTED — the sensor is finishing its recording…"
+                    self._publish()
+                    return
 
     def _update_baseline(self) -> None:
         settings = self.mission.settings if self.mission else {}
@@ -557,14 +597,14 @@ class CaptureService:
         self.triggered_at_wall = time.monotonic()
         self._set(CaptureState.TRIGGERED, "IMPACT! Recording landing data…" if reason != "manual" else "Capturing…")
 
-    def _start_finalize(self, reason: str) -> None:
+    def _start_finalize(self, reason: str, *, live_only: bool = False) -> None:
         if self.state == CaptureState.ANALYZING:
             return
         self._drain_raw()
         self._set(CaptureState.ANALYZING, "Analyzing landing data…")
-        self._finalize_task = asyncio.create_task(self._finalize(reason), name="capture-finalize")
+        self._finalize_task = asyncio.create_task(self._finalize(reason, live_only=live_only), name="capture-finalize")
 
-    async def _finalize(self, reason: str) -> None:
+    async def _finalize(self, reason: str, *, live_only: bool = False) -> None:
         mission = self.mission
         try:
             self.manager.request_stream(False)
@@ -572,8 +612,8 @@ class CaptureService:
             st = mission.settings
             pre_s = float(st.get("pre_trigger_s", 0.5))
             post_s = float(st.get("post_trigger_s", 1.5))
-            buf = list(self._buffer)
-            if self.trigger_ns is not None:
+            buf = list(self._live_buffer) if live_only else list(self._buffer)
+            if self.trigger_ns is not None and not live_only:
                 start = self.trigger_ns - int(pre_s * 1e9)
                 if self.freefall_start_ns is not None:
                     start = min(start, self.freefall_start_ns - 100_000_000)
@@ -591,13 +631,14 @@ class CaptureService:
                     "message": f"{dups} re-sent samples with already-seen timestamps were ignored.",
                 })
             # Notes from the adapter about this capture (e.g. a cut-off transfer).
-            extra_flags.extend(list(getattr(self.manager.adapter, "capture_flags", None) or []))
+            if not live_only:
+                extra_flags.extend(list(getattr(self.manager.adapter, "capture_flags", None) or []))
             if self._raw_truncated:
                 extra_flags.append({"code": "RAW_PAYLOADS_TRUNCATED", "severity": "info",
                                     "message": "Raw device responses exceeded the storage limit; parsed samples are complete."})
             test_id = await asyncio.to_thread(
                 self._analyze_and_store, mission, window, list(self._baseline_samples), adapter_info,
-                reason, post_s if self.trigger_ns is not None else None, extra_flags,
+                reason, post_s if self.trigger_ns is not None and not live_only else None, extra_flags, live_only,
             )
             self.test_id = test_id
             self._set(CaptureState.COMPLETE, "Landing analyzed")
@@ -608,7 +649,8 @@ class CaptureService:
             self._set(CaptureState.ERROR, self.error)
 
     def _analyze_and_store(self, mission: Mission, window: list[Sample], baseline: list[Sample], info,
-                           reason: str, requested_post_s: float | None, extra_flags: list[dict]) -> int:
+                           reason: str, requested_post_s: float | None, extra_flags: list[dict],
+                           live_only: bool = False) -> int:
         st = mission.settings
         t, ax, ay, az = samples_to_arrays(window)
         bl = samples_to_arrays(baseline) if baseline else None
@@ -627,6 +669,20 @@ class CaptureService:
             requested_post_s=requested_post_s,
             trigger_ns=self.trigger_ns,
         )
+        if live_only:
+            # Approximate fallback: the live stream is too sparse to measure a
+            # short impact peak. Keep it as a lower bound, never as a result.
+            rate = (result.sampling or {}).get("observed_rate_hz")
+            approx = result.observed_max_g
+            result.valid = False
+            result.measured_peak_g = None
+            result.flags.append(Flag(
+                "LIVE_STREAM_ONLY", "error",
+                f"The sensor's recording could not be downloaded ({reason}). This result comes from the live "
+                f"stream{f' (~{rate:.0f} Hz)' if rate else ''}, which can miss most of the short impact peak"
+                + (f": the real peak was at least {approx:.1f} g." if approx is not None else ".")
+                + " Not used in rankings.",
+            ))
         analysis = result.to_dict()
         analysis["flags"].extend(extra_flags)
         analysis["capture"] = {
@@ -636,6 +692,7 @@ class CaptureService:
             "baseline": self.baseline,
             "pre_trigger_s": st.get("pre_trigger_s"),
             "post_trigger_s": st.get("post_trigger_s"),
+            "live_only": live_only,
         }
         if simulated and self.sim_drop:
             analysis["simulation"] = self.sim_drop
@@ -658,6 +715,12 @@ class CaptureService:
         )
 
     def _on_sensor_event(self, event: str, detail: dict) -> None:
+        if (event == "disconnected" and self._record_mode and self.state == CaptureState.ARMED
+                and self.landing_seen and len(self._live_buffer) >= 20):
+            # The recording failed after a landing was seen live: keep the
+            # live samples as an approximate (invalid) result.
+            self._start_finalize(reason=str(detail.get("reason") or "sensor error"), live_only=True)
+            return
         if event == "disconnected" and self.state in (CaptureState.BASELINE, CaptureState.ARMED):
             self.manager.request_stream(False)
             self.error = f"Sensor connection lost during the test: {detail.get('reason', '')}".strip()
@@ -690,18 +753,27 @@ class CaptureService:
                     self._record_running_since = now
             need_s = float((self.mission.settings if self.mission else {}).get("baseline_s", 0.4))
             if self._record_running_since is not None and now - self._record_running_since >= need_s:
-                self._set(CaptureState.ARMED, "RECORDING — release the lander, then press STOP TEST")
+                self._set(CaptureState.ARMED, self._armed_message(now, progress))
         elif self.state == CaptureState.ARMED and not self._record_stopping:
-            # Refresh about once a second (elapsed time) or on progress change.
-            elapsed = int(now - self._record_running_since) if self._record_running_since else 0
-            key = (elapsed, int(progress) if progress is not None else None)
-            if key != self._last_progress_shown:
-                self._last_progress_shown = key
-                if progress is not None and progress >= 100:
-                    self.message = "The sensor reached its maximum recording time — downloading the data…"
-                else:
-                    self.message = f"RECORDING {elapsed} s — release the lander, then press STOP TEST"
+            # Refresh about once a second (countdown) or on progress change.
+            msg = self._armed_message(now, progress)
+            if msg != self._last_progress_shown:
+                self._last_progress_shown = msg
+                self.message = msg
                 self._publish()
+
+    def _armed_message(self, now: float, progress: float | None) -> str:
+        elapsed = now - self._record_running_since if self._record_running_since else 0.0
+        window = self._record_window_s()
+        remaining = max(0.0, window - elapsed) if window else None
+        if (progress is not None and progress >= 100) or (remaining is not None and remaining <= 0):
+            return "Recording finished — downloading the data from the sensor…"
+        if self.manager.record_can_stop():
+            return f"RECORDING {int(elapsed)} s — release the lander, then press STOP TEST"
+        left = f"{math.ceil(remaining)} s" if remaining is not None else None
+        if self.landing_seen:
+            return f"LANDING DETECTED — recording ends in {left}" if left else "LANDING DETECTED — finishing the recording…"
+        return f"RELEASE THE LANDER — {left} left" if left else f"RECORDING {int(elapsed)} s — release the lander"
 
     async def _watchdog_loop(self) -> None:
         while True:
@@ -715,7 +787,7 @@ class CaptureService:
                     if self._record_mode:
                         # The sensor's own maximum recording time (plus the
                         # download) bounds a record-mode test.
-                        timeout = max(timeout, 3.0 * float(self._record_max_s() or 0) + 60.0)
+                        timeout = max(timeout, 3.0 * float(self._record_window_s() or 0) + 60.0)
                     if now - self._armed_mono > timeout:
                         self.manager.request_stream(False)
                         self.error = f"No landing detected within {timeout:.0f} s — test timed out."

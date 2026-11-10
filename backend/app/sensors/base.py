@@ -60,6 +60,10 @@ class SensorNotConfiguredError(SensorError):
     endpoints that have not been confirmed against the physical device)."""
 
 
+class SensorBusyError(SensorNotConfiguredError):
+    """The sensor is still busy with an earlier recording; try again shortly."""
+
+
 class SensorDisconnectedError(SensorError):
     pass
 

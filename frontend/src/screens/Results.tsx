@@ -144,6 +144,8 @@ export function Results() {
   const warnings = test.quality_flags.filter((f) => f.severity === "warning");
   const infos = test.quality_flags.filter((f) => f.severity === "info" && f.code !== "SIMULATED");
   const range = a.saturation?.range_g ?? 16;
+  // Recording lost, live stream kept: a lower bound only, never ranked.
+  const liveOnly = test.quality_flags.some((f) => f.code === "LIVE_STREAM_ONLY") && test.observed_max_g != null;
   const young = gradeBand === "k4";
   const showAdvanced = gradeBand !== "k4";
 
@@ -165,6 +167,12 @@ export function Results() {
             <div className="pop-in font-mono text-8xl font-black text-white glow-cyan">
               {shown.toFixed(1)}
               <span className="ml-2 text-5xl text-telemetry">g</span>
+            </div>
+          ) : liveOnly ? (
+            <div className="pop-in py-2">
+              <div className="font-mono text-7xl font-black text-amber-200">≥ {test.observed_max_g!.toFixed(1)} g</div>
+              <div className="mt-1 font-display text-lg tracking-widest text-amber-200">APPROXIMATE · LIVE STREAM</div>
+              <div className="mt-1 text-xs text-amber-100/80">The recording could not be downloaded. The real peak was at least this high.</div>
             </div>
           ) : test.saturated ? (
             <div className="pop-in py-2">
@@ -200,7 +208,17 @@ export function Results() {
             <Stat label="You predicted" value={describePrediction(test.prediction_kind ? { kind: test.prediction_kind as "number", label: test.prediction_label, value_g: test.predicted_peak_g } : null)} />
             <Stat
               label="Measured"
-              value={peak !== null ? fmtG(peak) : test.saturated ? (test.observed_max_g != null ? `≥ ${test.observed_max_g.toFixed(1)} g` : `> ${range} g`) : "—"}
+              value={
+                peak !== null
+                  ? fmtG(peak)
+                  : liveOnly
+                    ? `≥ ${test.observed_max_g!.toFixed(1)} g (approx.)`
+                    : test.saturated
+                      ? test.observed_max_g != null
+                        ? `≥ ${test.observed_max_g.toFixed(1)} g`
+                        : `> ${range} g`
+                      : "—"
+              }
               tone={peak !== null ? "default" : "alert"}
             />
           </div>

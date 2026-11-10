@@ -239,7 +239,7 @@ function SensorTab() {
           <div className="mt-3 rounded-xl border border-space-600 p-3 text-sm">
             <div className="mb-1 font-semibold">Sensor's own settings (read from the sensor)</div>
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-slate-300">
-              {sensor.sensor_settings.duration_s != null && <span>Max recording time {sensor.sensor_settings.duration_s} s</span>}
+              {sensor.sensor_settings.duration_s != null && <span>Recording time {sensor.sensor_settings.duration_s} s</span>}
               {sensor.sensor_settings.accel_range_g != null && (
                 <span className={sensor.sensor_settings.accel_range_g < 16 ? "text-amber-200" : undefined}>Range ±{sensor.sensor_settings.accel_range_g} g</span>
               )}
@@ -260,7 +260,7 @@ function SensorTab() {
                     : "off (starts on the Live Test screen)"}
               </div>
             )}
-            <div className="mt-1 text-xs text-slate-500">ARM TEST sets the max recording time to the app's "EVB Lite: max test length" (Analysis tab).</div>
+            <div className="mt-1 text-xs text-slate-500">ARM TEST sets the sensor's recording time to the app's "EVB Lite: test length" (Analysis tab).</div>
           </div>
         )}
         {sensor.last_error && <div className="mt-3 rounded-lg bg-alert/10 px-3 py-2 text-sm text-red-200">Last error: {sensor.last_error}</div>}
@@ -746,10 +746,10 @@ function AnalysisTab({ settings, reload }: { settings: Record<string, unknown>; 
           <NumberField label="Baseline duration (s)" value={settings.baseline_s} onSave={(v) => save({ baseline_s: v })} />
           <NumberField label="Arm timeout (s)" value={settings.arm_timeout_s} onSave={(v) => save({ arm_timeout_s: v })} />
           <NumberField
-            label="EVB Lite: max test length (s)"
-            value={settings.record_max_s}
-            onSave={(v) => save({ record_max_s: v })}
-            hint="The sensor stops by itself after this; STOP TEST ends it sooner. 0 = keep the sensor's own time."
+            label="EVB Lite: test length (s)"
+            value={settings.record_window_s}
+            onSave={(v) => save({ record_window_s: v })}
+            hint="Each EVB Lite test records this long (default 10 s); the lander is released during the countdown. 0 = keep the sensor's own time."
           />
           <NumberField label="Trigger: rise above rest (g)" value={settings.trigger_deviation_g} onSave={(v) => save({ trigger_deviation_g: v })} />
           <NumberField label="Trigger without free fall (g)" value={settings.trigger_without_freefall_g} onSave={(v) => save({ trigger_without_freefall_g: v })} hint="Higher = less sensitive to handling bumps" />
