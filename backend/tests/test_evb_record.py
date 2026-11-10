@@ -12,7 +12,7 @@ import httpx
 import numpy as np
 import pytest
 
-from app.sensors.base import AdapterInfo, ConnectionState, Sample, SensorError
+from app.sensors.base import AdapterInfo, ConnectionState, Sample, SensorError, SensorNotConfiguredError
 from app.sensors.csv_format import parse_csv_bytes
 from app.sensors.evb_lite import EVBLiteAdapter
 from app.sensors.evb_profile import load_profile, parse_profile
@@ -86,30 +86,63 @@ def test_record_request_must_be_documented_and_read_only():
 
 # ---------------------------------------------------------------- adapter
 class RecordingDevice:
-    """Mock of the observed portal behavior: /start on port 80 redirects to
-    port 8000, which answers with the CSV once the recording is done;
-    /progress reports percent while recording and HTTP 400 when idle."""
+    """Mock of the observed portal behavior (HAR + /js/index.js): /start on
+    port 80 redirects to port 8000, which answers with the CSV once the
+    recording time is over or /stop was called; /progress reports percent
+    while recording and HTTP 400 when idle; /settings, /duration, /csv and
+    /status as used by the portal."""
 
-    def __init__(self, body: bytes = RECORDING, record_s: float = 0.3, status: int = 200):
+    def __init__(self, body: bytes = RECORDING, record_s: float = 0.3, status: int = 200,
+                 duration: float = 1.0, gravity_comp: bool = False, accel_range: int = 16,
+                 status_after_stop: int = 200):
         self.body, self.record_s, self.status = body, record_s, status
+        self.settings = {"accel": True, "gyro": False, "temp": False, "odr": 1666.0, "accel_range": accel_range,
+                         "gyro_range": 2000, "duration": duration, "gravity_comp": gravity_comp}
+        self.status_after_stop = status_after_stop
         self.requests: list[httpx.Request] = []
         self.recording = False
+        self._stopped = asyncio.Event()
+
+    def paths(self, method=None):
+        return [r.url.path for r in self.requests if method is None or r.method == method]
 
     async def __call__(self, req: httpx.Request) -> httpx.Response:
         self.requests.append(req)
-        if req.url.path == "/start" and req.url.port in (None, 80):
+        path = req.url.path
+        if path == "/start" and req.url.port in (None, 80):
             return httpx.Response(302, headers={"Location": f"http://{HOST}:8000/start?format=csv"})
-        if req.url.path == "/start" and req.url.port == 8000:
+        if path == "/start" and req.url.port == 8000:
             self.recording = True
-            await asyncio.sleep(self.record_s)
+            self._stopped.clear()
+            try:
+                await asyncio.wait_for(self._stopped.wait(), self.record_s)
+                stopped = True
+            except asyncio.TimeoutError:
+                stopped = False
             self.recording = False
-            if self.status != 200:
-                return httpx.Response(self.status, json={"error": "busy"})
+            code = self.status_after_stop if stopped else self.status
+            if code != 200:
+                return httpx.Response(code, json={"error": "busy"})
             return httpx.Response(200, content=self.body, headers={"Content-Type": "text/csv"})
-        if req.url.path == "/progress":
+        if path == "/stop":
+            if not self.recording:
+                return httpx.Response(400, json={"error": "Data collection not in progress"})
+            self._stopped.set()
+            return httpx.Response(200, json={"status": "Stopped."})
+        if path == "/progress":
             if self.recording:
                 return httpx.Response(200, json={"progress": 42})
             return httpx.Response(400, json={"error": "Data collection not in progress"})
+        if path == "/settings":
+            return httpx.Response(200, json=self.settings)
+        if path == "/duration" and req.method == "POST":
+            self.settings["duration"] = float(req.url.params["value"])
+            return httpx.Response(200, json={"duration": self.settings["duration"]})
+        if path == "/csv":
+            return httpx.Response(200, content=self.body, headers={"Content-Type": "text/csv"})
+        if path == "/status":
+            return httpx.Response(200, json={"Hostname": "EVBS_V1F9L", "version": "1.4.2", "Battery SOC": 87,
+                                             "Battery Charging": False})
         return httpx.Response(200, text="<html>portal</html>")
 
 
@@ -141,7 +174,7 @@ async def test_record_mode_fetches_one_recording_with_device_timestamps():
     assert await a.read_samples() == [], "a recording is delivered once"
     starts = [r for r in dev.requests if r.url.path == "/start"]
     assert [r.url.port for r in starts] == [None, 8000] and all(r.url.params["format"] == "csv" for r in starts)
-    assert all(r.method == "GET" for r in dev.requests)
+    assert all(r.method == "GET" for r in dev.requests), "record_max_s unset: no device setting is changed"
     raws = a.drain_raw_payloads()
     assert len(raws) == 1 and raws[0].body == RECORDING
     await a.disconnect()
@@ -162,7 +195,7 @@ async def test_empty_recording_is_a_sensor_error():
         await read_until_samples(a)
 
 
-async def test_stop_capture_abandons_an_unfinished_recording():
+async def test_cancel_ends_the_recording_on_the_sensor():
     dev = RecordingDevice(record_s=5.0)
     a = EVBLiteAdapter(host=HOST, profile=shipped_profile(), transport=httpx.MockTransport(dev))
     await a.start_capture()
@@ -170,17 +203,84 @@ async def test_stop_capture_abandons_an_unfinished_recording():
     t0 = time.monotonic()
     await a.stop_capture()
     assert time.monotonic() - t0 < 1.0
+    assert "/stop" in dev.paths(), "the sensor is not left recording"
     assert await a.read_samples() == []
+
+
+async def test_stop_recording_ends_early_and_delivers_the_recording():
+    dev = RecordingDevice(record_s=30.0, duration=30.0)
+    a = EVBLiteAdapter(host=HOST, profile=shipped_profile(), transport=httpx.MockTransport(dev))
+    await a.start_capture()
+    await asyncio.sleep(0.1)
+    assert await a.read_samples() == []
+    t0 = time.monotonic()
+    assert await a.stop_recording() is True
+    samples, _ = await read_until_samples(a)
+    assert time.monotonic() - t0 < 2.0 and len(samples) == 1752
+    assert await a.stop_recording() is False, "nothing left to stop"
+
+
+async def test_failed_response_after_stop_falls_back_to_downloading_the_file():
+    dev = RecordingDevice(record_s=30.0, status_after_stop=500)
+    a = EVBLiteAdapter(host=HOST, profile=shipped_profile(), transport=httpx.MockTransport(dev))
+    await a.start_capture()
+    await asyncio.sleep(0.05)
+    await a.stop_recording()
+    samples, _ = await read_until_samples(a)
+    assert len(samples) == 1752 and "/csv" in dev.paths()
+
+
+async def test_max_recording_time_is_set_only_when_it_differs():
+    dev = RecordingDevice(duration=1.0)
+    a = EVBLiteAdapter(host=HOST, profile=shipped_profile(), transport=httpx.MockTransport(dev))
+    a.record_max_s = 60
+    await a.start_capture()
+    posts = [r for r in dev.requests if r.method == "POST"]
+    assert [(r.url.path, r.url.params["value"]) for r in posts] == [("/duration", "60")]
+    assert a.sensor_settings["duration_s"] == 60.0
+    await a.stop_capture()
+    n = len(dev.requests)
+    await a.start_capture()
+    assert not [r for r in dev.requests[n:] if r.method == "POST"], "already 60 s: not written again"
+    await a.stop_capture()
+
+
+async def test_gravity_compensation_on_refuses_to_record():
+    dev = RecordingDevice(gravity_comp=True)
+    a = EVBLiteAdapter(host=HOST, profile=shipped_profile(), transport=httpx.MockTransport(dev))
+    with pytest.raises(SensorNotConfiguredError, match="Gravity Compensation"):
+        await a.start_capture()
+    assert "/start" not in dev.paths()
+
+
+async def test_status_reports_battery_and_the_sensors_own_settings():
+    dev = RecordingDevice(accel_range=8, duration=20.0)
+    a = EVBLiteAdapter(host=HOST, profile=shipped_profile(), transport=httpx.MockTransport(dev))
+    st = await a.get_status()
+    assert st["battery_percent"] == 87 and st["firmware_version"] == "1.4.2" and st["device_id"] == "EVBS_V1F9L"
+    assert st["sensor_duration_s"] == 20.0 and st["sensor_gravity_comp"] is False
+    assert a.range_g == 8.0 and a.info.accel_range_g == 8.0, "saturation uses the range the sensor reports"
+    assert all(r.method == "GET" for r in dev.requests)
 
 
 # ---------------------------------------------------------------- manager
 class RecordAdapter:
-    def __init__(self):
+    def __init__(self, can_stop=True):
         self.info = AdapterInfo(adapter="fake", source="evb_lite", data_origin="physical", accel_range_g=16.0,
                                 capture_mode="record")
+        self.profile = shipped_profile()
+        if not can_stop:
+            self.profile.record.stop = None
         self.starts = 0
+        self.stops = 0
         self.record_progress = None
+        self.record_max_s = None
+        self.sensor_settings = {"duration_s": 60.0}
         self.duplicates_dropped = 0
+
+    async def stop_recording(self):
+        self.stops += 1
+        return True
 
     async def connect(self): ...
     async def disconnect(self): ...
@@ -205,7 +305,9 @@ async def test_live_preview_never_starts_a_recording(env, store, database):
     mgr.request_stream(True)
     await mgr._tick()
     assert mgr.adapter.starts == 1 and mgr.streaming
-    assert mgr.snapshot()["capture_mode"] == "record"
+    assert mgr.adapter.record_max_s == 60.0, "the max test length setting is passed to the sensor"
+    snap = mgr.snapshot()
+    assert snap["capture_mode"] == "record" and snap["record_can_stop"] and snap["record_max_s"] == 60.0
 
 
 # ---------------------------------------------------------------- capture flow
@@ -215,6 +317,7 @@ async def record_capture(env, store, database, repo):
     mgr.adapter = RecordAdapter()
     mgr.mode = "evb_lite"
     mgr.state = ConnectionState.CONNECTED
+    mgr.streaming = True
     mgr.snapshot = lambda: {"streaming_available": True}
     cap = CaptureService(mgr, repo, store, Hub())
     cap.cfg_id = repo.list_configurations()[1]["id"]
@@ -250,15 +353,20 @@ async def test_record_mode_test_runs_from_arm_to_analyzed_result(record_capture)
     cap.manager.adapter.record_progress = 10.0
     cap._record_tick(now)
     cap._record_tick(now + 0.5)
-    assert cap.state == CaptureState.ARMED and "release" in cap.message.lower()
-    cap.manager.adapter.record_progress = 55.0
-    cap._record_tick(now + 0.6)
-    assert "55%" in cap.message and cap.snapshot()["record_progress"] == 55.0
+    assert cap.state == CaptureState.ARMED and "STOP TEST" in cap.message
+    cap.manager.adapter.record_progress = 30.0
+    cap._record_tick(now + 18.2)
+    assert cap.state == CaptureState.ARMED and "18 s" in cap.message, "stays armed while the child gets ready"
+    snap = cap.snapshot()
+    assert snap["record_can_stop"] and snap["record_max_s"] == 60.0 and not snap["record_stopping"]
 
-    with pytest.raises(CaptureError, match="fixed time window"):
+    with pytest.raises(CaptureError, match="STOP TEST"):
         await cap.manual_trigger()
-    with pytest.raises(CaptureError, match="fixed time window"):
-        await cap.stop_and_analyze()
+    await cap.stop_and_analyze()
+    assert cap.manager.adapter.stops == 1 and cap.snapshot()["record_stopping"]
+    assert "downloading" in cap.message
+    await cap.stop_and_analyze()
+    assert cap.manager.adapter.stops == 1, "a second press does not stop twice"
 
     cap._on_samples(drop_recording())
     assert await wait_state(cap, {CaptureState.COMPLETE, CaptureState.ERROR}) == CaptureState.COMPLETE, cap.error
@@ -266,6 +374,14 @@ async def test_record_mode_test_runs_from_arm_to_analyzed_result(record_capture)
     assert t["source"] == "evb_lite" and t["data_origin"] == "physical"
     assert t["measured_peak_g"] == pytest.approx(8.0, abs=0.1)
     assert not cap.manager._capture_wants_stream
+
+
+async def test_stop_without_a_stop_request_explains_the_fixed_window(record_capture):
+    cap = record_capture
+    cap.manager.adapter.profile.record.stop = None
+    await cap.arm(configuration_id=cap.cfg_id, grade_band=None, prediction=None)
+    with pytest.raises(CaptureError, match="no stop request"):
+        await cap.stop_and_analyze()
 
 
 async def test_record_mode_without_progress_endpoint_still_arms(record_capture):

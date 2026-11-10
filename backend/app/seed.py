@@ -152,6 +152,10 @@ DEFAULT_SETTINGS: dict = {
     "post_trigger_s": 1.5,
     "baseline_s": 0.4,
     "arm_timeout_s": 180,
+    # Record-mode sensors (EVB Lite): longest a test may record before the
+    # sensor stops by itself (STOP TEST ends it earlier). Set on the sensor at
+    # every ARM; 0 = keep the sensor's own recording time.
+    "record_max_s": 60,
     "trigger_deviation_g": 1.5,
     "trigger_without_freefall_g": 3.0,
     # Analysis (see app/analysis/events.py and pipeline.py)

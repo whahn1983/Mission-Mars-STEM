@@ -17,10 +17,12 @@ What it will do once the profile is verified (docs/evb-lite-integration.md):
 * Use the device's own timestamps. Responses without timestamps are rejected
   rather than given synthetic ones.
 * In ``record`` mode (``capture.mode`` in the profile), send the documented
-  record request when capture starts. The device records a fixed window and
-  returns the whole recording in that response; ``read_samples()`` returns it
-  as one batch and reports progress from the optional progress endpoint while
-  the device records.
+  record request when capture starts. The device records and returns the
+  whole recording in that response; ``read_samples()`` returns it as one
+  batch and reports progress from the optional progress endpoint while the
+  device records. Optional profile requests read the device's recording
+  settings, set the maximum recording time before each test, and end the
+  recording early (``stop_recording()``).
 
 No endpoint path, field name or unit is hard-coded here.
 """
@@ -91,6 +93,11 @@ class EVBLiteAdapter:
         self._last_progress_poll = 0.0
         self.record_progress: float | None = None
         self.record_started_at: float | None = None
+        # Maximum recording time to set on the device before each test
+        # (seconds; None or 0 = leave the device's own setting alone).
+        self.record_max_s: float | None = None
+        self.sensor_settings: dict = {}
+        self._stop_requested = False
         self.info = AdapterInfo(
             adapter="evb_lite",
             source="evb_lite",
@@ -185,6 +192,13 @@ class EVBLiteAdapter:
                             status[key] = None
             except (json.JSONDecodeError, ValueError):
                 status["status_parse_error"] = "Status response was not JSON"
+        rec = self.profile.record
+        if self.profile.capture_mode == "record" and rec is not None and rec.settings_path:
+            try:
+                settings = await self.read_device_settings()
+                status.update({f"sensor_{k}": v for k, v in settings.items()})
+            except SensorError as exc:
+                status["settings_error"] = str(exc)
         if status.get("firmware_version"):
             self.info.firmware_version = str(status["firmware_version"])
         if status.get("device_id"):
@@ -213,6 +227,8 @@ class EVBLiteAdapter:
         if self.profile.capture_mode == "record":
             await self._cancel_recording()
             self._ensure_client()
+            await self._prepare_recording()
+            self._stop_requested = False
             self._record_delivered = False
             self.record_progress = None
             self.record_started_at = time.monotonic()
@@ -231,8 +247,13 @@ class EVBLiteAdapter:
     async def stop_capture(self) -> None:
         was = self._streaming
         self._streaming = False
-        # No stop request has been observed for record mode: an unfinished
-        # recording keeps running on the device until its configured time.
+        # An unfinished recording (cancelled test) is ended on the device too,
+        # so the next ARM does not find the sensor still busy.
+        if self._record_task is not None and not self._record_task.done():
+            try:
+                await self.stop_recording()
+            except SensorError as exc:
+                log.warning("Could not stop the EVB Lite recording: %s", exc)
         await self._cancel_recording()
         if was and self.profile.stop is not None:
             r = self.profile.stop
@@ -261,19 +282,121 @@ class EVBLiteAdapter:
         return self.parse_samples_payload(resp.content, resp.headers.get("content-type", ""))
 
     # ------------------------------------------------------------ record mode
+    @staticmethod
+    def _as_bool(v) -> bool | None:
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, str) and v.strip().lower() in ("true", "false", "1", "0", "on", "off"):
+            return v.strip().lower() in ("true", "1", "on")
+        if isinstance(v, (int, float)):
+            return bool(v)
+        return None
+
+    async def read_device_settings(self) -> dict:
+        """Read-only GET of the device's recording settings, normalized to
+        ``duration_s``, ``accel_range_g``, ``gravity_comp`` and
+        ``sample_rate_hz`` (whichever the profile maps)."""
+        rec = self.profile.record
+        if rec is None or not rec.settings_path:
+            return {}
+        resp = await self._request("GET", rec.settings_path)
+        if resp.status_code >= 400:
+            raise SensorError(f"Reading sensor settings failed with HTTP {resp.status_code}")
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise SensorError("Sensor settings response was not JSON") from exc
+        out: dict = {}
+        for key, dotted in rec.settings_fields.items():
+            try:
+                v = json_get(body, dotted)
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+            if key == "gravity_comp":
+                out[key] = self._as_bool(v)
+            else:
+                try:
+                    out[key] = float(v)
+                except (TypeError, ValueError):
+                    continue
+        self.sensor_settings = out
+        rng = out.get("accel_range_g")
+        if rng in (2.0, 4.0, 8.0, 16.0, 32.0):
+            # Saturation is judged against the range the sensor reports.
+            self.range_g = float(rng)
+            self.info.accel_range_g = self.range_g
+        return out
+
+    async def _prepare_recording(self) -> None:
+        """Check and (if configured) set the device's recording settings."""
+        rec = self.profile.record
+        assert rec is not None
+        settings: dict = {}
+        if rec.settings_path:
+            try:
+                settings = await self.read_device_settings()
+            except SensorError as exc:
+                log.warning("Could not read EVB Lite settings before recording: %s", exc)
+        if settings.get("gravity_comp") is True:
+            raise SensorNotConfiguredError(
+                "Gravity Compensation is ON in the sensor portal. Turn it off (sensor portal → Sensor Settings): "
+                "the analysis needs the 1 g reading of the lander at rest."
+            )
+        want = float(self.record_max_s or 0)
+        if rec.set_duration and want > 0 and settings.get("duration_s") != want:
+            sd = rec.set_duration
+            resp = await self._request(sd.method, sd.path, params={sd.param: f"{want:g}"})
+            if resp.status_code >= 400:
+                raise SensorError(f"Setting the sensor's recording time to {want:g} s failed with HTTP {resp.status_code}")
+            got = want
+            with contextlib.suppress(ValueError, TypeError, KeyError, AttributeError):
+                got = float(resp.json()["duration"])
+            self.sensor_settings["duration_s"] = got
+            log.info("EVB Lite recording time set to %g s", got)
+
+    def _record_timeout_s(self) -> float:
+        rec = self.profile.record
+        assert rec is not None
+        dur = self.sensor_settings.get("duration_s") or 0
+        # The download takes about as long as the recording at ~1.7 kHz, so
+        # allow for both plus a margin.
+        return max(rec.timeout_s, 2.5 * float(dur) + 30.0)
+
+    async def stop_recording(self) -> bool:
+        """End the recording early with the profile's stop request. The open
+        record request then delivers what was recorded. Returns False when the
+        profile has no stop request or nothing is recording."""
+        rec = self.profile.record
+        if rec is None or rec.stop is None or self._record_task is None or self._record_task.done():
+            return False
+        r = rec.stop
+        resp = await self._request(r.method, r.path, params=r.query or None, json=r.json_body,
+                                   timeout=httpx.Timeout(self.timeout_s))
+        if resp.status_code >= 400:
+            raise SensorError(f"Stop request {r.method} {r.path} failed with HTTP {resp.status_code}")
+        self._stop_requested = True
+        return True
+
+    async def _download_last_recording(self) -> httpx.Response | None:
+        rec = self.profile.record
+        if rec is None or not rec.download_path:
+            return None
+        resp = await self._request("GET", rec.download_path, timeout=httpx.Timeout(self.timeout_s, read=self._record_timeout_s()))
+        return resp if resp.status_code < 400 and resp.content.strip() else None
+
     async def _run_recording(self) -> httpx.Response:
         rec = self.profile.record
         assert rec is not None
         # The response only arrives once the device has finished recording
         # and sent the file, so the read timeout covers the whole recording.
-        timeout = httpx.Timeout(self.timeout_s, read=rec.timeout_s)
+        timeout = httpx.Timeout(self.timeout_s, read=self._record_timeout_s())
         try:
             return await self._request("GET", rec.path, params=rec.query or None, timeout=timeout)
         except SensorDisconnectedError as exc:
             if isinstance(exc.__cause__, httpx.ReadTimeout):
                 raise SensorError(
-                    f"The EVB Lite recording did not finish within {rec.timeout_s:g} s. Check the recording time "
-                    "in the sensor portal (Sensor Settings) or raise capture.record.timeout_s in the profile."
+                    f"The EVB Lite recording did not finish within {self._record_timeout_s():g} s. Check the recording "
+                    "time in the sensor portal (Sensor Settings) or raise capture.record.timeout_s in the profile."
                 ) from exc
             raise
 
@@ -312,8 +435,22 @@ class EVBLiteAdapter:
             return []
         self._record_task = None
         self._record_delivered = True
-        resp = task.result()  # re-raises a failed or timed-out recording
-        if resp.status_code >= 400:
+        try:
+            resp = task.result()  # re-raises a failed or timed-out recording
+            failed = resp.status_code >= 400 or not resp.content.strip()
+        except SensorError:
+            if not self._stop_requested:
+                raise
+            resp, failed = None, True
+        if failed and self._stop_requested:
+            # After a stop, fall back to downloading the last recording.
+            fallback = await self._download_last_recording()
+            if fallback is not None:
+                resp = fallback
+                failed = False
+        if resp is None:
+            raise SensorError("The EVB Lite recording could not be downloaded after stopping.")
+        if failed and resp.status_code >= 400:
             excerpt = resp.text[:200].strip()
             raise SensorError(
                 f"Record request {self.profile.record.path} failed with HTTP {resp.status_code}"

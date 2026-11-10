@@ -15,12 +15,13 @@ IDLE → BASELINE → ARMED → TRIGGERED → ANALYZING → COMPLETE
   test, samples and raw device payloads in a single transaction.
 
 Record-mode sensors (``AdapterInfo.capture_mode == "record"``, e.g. the EVB
-Lite) record a fixed window on the device and deliver it in one batch when
-the recording ends. For them, ARM starts the recording; BASELINE lasts until
-the device reports that it is recording plus ``baseline_s``; ARMED tells the
-students to release and shows the recording progress; the delivered
-recording is analyzed as a whole (the impact is found by the analysis, as for
-a CSV import). CAPTURE and STOP are not available in that mode.
+Lite) record on the device and deliver the recording in one batch when it
+ends. For them, ARM starts the recording; BASELINE lasts until the device
+reports that it is recording plus ``baseline_s``; ARMED tells the students to
+release and stays until the operator presses STOP (which ends the recording
+on the device) or the sensor reaches its maximum recording time; the
+delivered recording is analyzed as a whole (the impact is found by the
+analysis, as for a CSV import). CAPTURE is not available in that mode.
 """
 
 from __future__ import annotations
@@ -48,7 +49,11 @@ log = logging.getLogger(__name__)
 
 MAX_RAW_BYTES_PER_TEST = 25 * 1024 * 1024
 RECORD_ONLY_MESSAGE = (
-    "The sensor records a fixed time window, so this test ends by itself when the recording finishes. "
+    "The sensor records the whole test. Press STOP TEST after the landing to end the recording, "
+    "or Cancel to abandon the test."
+)
+RECORD_NO_STOP_MESSAGE = (
+    "This sensor profile has no stop request, so the test ends by itself when the sensor's recording time is over. "
     "Use Cancel to abandon it."
 )
 
@@ -115,7 +120,8 @@ class CaptureService:
         self.sim_drop: dict | None = None
         self._record_mode = False
         self._record_running_since: float | None = None
-        self._last_progress_shown: int | None = None
+        self._last_progress_shown: tuple | None = None
+        self._record_stopping = False
         manager.add_listener(self._on_samples)
         manager.add_event_listener(self._on_sensor_event)
 
@@ -145,6 +151,12 @@ class CaptureService:
             "capture_mode": "record" if self._adapter_records() else "stream",
             "record_progress": self._record_progress() if self._record_mode and self.state in (
                 CaptureState.BASELINE, CaptureState.ARMED) else None,
+            "record_elapsed_s": round(time.monotonic() - self._record_running_since, 1) if (
+                self._record_mode and self._record_running_since and self.state in (
+                    CaptureState.BASELINE, CaptureState.ARMED)) else None,
+            "record_max_s": self._record_max_s() if self._record_mode else None,
+            "record_can_stop": self.manager.record_can_stop() if self._record_mode else False,
+            "record_stopping": self._record_stopping,
             "mission": None if m is None else {
                 "configuration_id": m.configuration_id,
                 "configuration_code": m.configuration.get("code"),
@@ -161,6 +173,11 @@ class CaptureService:
     def _record_progress(self) -> float | None:
         v = getattr(self.manager.adapter, "record_progress", None)
         return None if v is None else round(float(v), 1)
+
+    def _record_max_s(self) -> float | None:
+        settings = getattr(self.manager.adapter, "sensor_settings", None) or {}
+        v = settings.get("duration_s")
+        return None if v is None else float(v)
 
     def _adapter_records(self) -> bool:
         return getattr(self.manager.adapter.info, "capture_mode", "stream") == "record"
@@ -237,6 +254,7 @@ class CaptureService:
         self._record_mode = self._adapter_records()
         self._record_running_since = None
         self._last_progress_shown = None
+        self._record_stopping = False
         self.manager.request_stream(True)
         if self._record_mode:
             self._set(CaptureState.BASELINE, "Starting the sensor recording — hold the lander still…")
@@ -281,12 +299,34 @@ class CaptureService:
         if self.state not in (CaptureState.BASELINE, CaptureState.ARMED, CaptureState.TRIGGERED):
             raise CaptureError("No capture is running.")
         if self._record_mode:
-            raise CaptureError(RECORD_ONLY_MESSAGE)
+            return await self._stop_recording()
         if self.state == CaptureState.BASELINE:
             if not self._buffer:
                 raise CaptureError("No samples received yet — nothing to analyze. Cancel or wait.")
             self._accept_baseline(keep_buffer=True)
         self._start_finalize(reason="stopped by operator")
+        return self.snapshot()
+
+    async def _stop_recording(self) -> dict:
+        """STOP TEST in record mode: end the recording on the sensor. The
+        recording then arrives through the normal sample path and is analyzed."""
+        if self._record_stopping:
+            return self.snapshot()
+        if not self.manager.record_can_stop():
+            raise CaptureError(RECORD_NO_STOP_MESSAGE)
+        self._record_stopping = True
+        self.message = "Stopping the sensor and downloading the recording…"
+        self._publish()
+        try:
+            sent = await self.manager.stop_recording()
+        except Exception as exc:  # noqa: BLE001 — any sensor failure
+            self._record_stopping = False
+            self.message = "RECORDING — release the lander, then press STOP TEST"
+            self._publish()
+            raise CaptureError(f"Could not stop the sensor's recording: {exc}") from exc
+        if not sent and self.state in (CaptureState.BASELINE, CaptureState.ARMED):
+            # The recording already ended and is on its way.
+            log.info("STOP pressed after the sensor's recording had ended")
         return self.snapshot()
 
     async def cancel(self, message: str = "Test cancelled") -> dict:
@@ -299,6 +339,7 @@ class CaptureService:
         self.error = None
         self.armed_at = None
         self._armed_mono = None
+        self._record_stopping = False
         self._set(CaptureState.IDLE, message)
         return self.snapshot()
 
@@ -359,7 +400,9 @@ class CaptureService:
             mags = [math.sqrt(s.ax_g**2 + s.ay_g**2 + s.az_g**2) for s in samples if None not in (s.ax_g, s.ay_g, s.az_g)]
             if mags:
                 self.live_peak_g = max(mags)
-            self._start_finalize(reason="recording complete")
+            reason = "stopped by operator" if self._record_stopping else "sensor recording time reached"
+            self._record_stopping = False
+            self._start_finalize(reason=reason)
             return
         # Bound memory while waiting a long time for the drop.
         if self.state != CaptureState.TRIGGERED and self._buffer:
@@ -645,13 +688,17 @@ class CaptureService:
                     self._record_running_since = now
             need_s = float((self.mission.settings if self.mission else {}).get("baseline_s", 0.4))
             if self._record_running_since is not None and now - self._record_running_since >= need_s:
-                self._set(CaptureState.ARMED, "RECORDING — release the lander now!")
-        elif self.state == CaptureState.ARMED and progress is not None:
-            shown = int(progress)
-            if shown != self._last_progress_shown:
-                self._last_progress_shown = shown
-                self.message = (f"RECORDING {shown}% — release the lander now!" if shown < 100
-                                else "Recording finished — downloading the data…")
+                self._set(CaptureState.ARMED, "RECORDING — release the lander, then press STOP TEST")
+        elif self.state == CaptureState.ARMED and not self._record_stopping:
+            # Refresh about once a second (elapsed time) or on progress change.
+            elapsed = int(now - self._record_running_since) if self._record_running_since else 0
+            key = (elapsed, int(progress) if progress is not None else None)
+            if key != self._last_progress_shown:
+                self._last_progress_shown = key
+                if progress is not None and progress >= 100:
+                    self.message = "The sensor reached its maximum recording time — downloading the data…"
+                else:
+                    self.message = f"RECORDING {elapsed} s — release the lander, then press STOP TEST"
                 self._publish()
 
     async def _watchdog_loop(self) -> None:
@@ -663,6 +710,10 @@ class CaptureService:
                     self._record_tick(now)
                 if self.state in (CaptureState.BASELINE, CaptureState.ARMED) and self._armed_mono:
                     timeout = float((self.mission.settings if self.mission else {}).get("arm_timeout_s", 180))
+                    if self._record_mode:
+                        # The sensor's own maximum recording time (plus the
+                        # download) bounds a record-mode test.
+                        timeout = max(timeout, 3.0 * float(self._record_max_s() or 0) + 60.0)
                     if now - self._armed_mono > timeout:
                         self.manager.request_stream(False)
                         self.error = f"No landing detected within {timeout:.0f} s — test timed out."

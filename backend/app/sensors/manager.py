@@ -241,6 +241,20 @@ class SensorManager:
     def wake(self) -> None:
         self._wake.set()
 
+    async def stop_recording(self) -> bool:
+        """Ask a record-mode sensor to end its recording early. Returns False
+        if the adapter cannot (no stop request in its profile)."""
+        async with self._lock:
+            stop = getattr(self.adapter, "stop_recording", None)
+            if stop is None or not self.streaming:
+                return False
+            return bool(await stop())
+
+    def record_can_stop(self) -> bool:
+        profile = getattr(self.adapter, "profile", None)
+        rec = getattr(profile, "record", None)
+        return bool(rec is not None and rec.stop is not None)
+
     @property
     def connected(self) -> bool:
         return self.state in (ConnectionState.CONNECTED, ConnectionState.CAPTURING)
@@ -278,6 +292,8 @@ class SensorManager:
         wanted = self._capture_wants_stream or (self.hub.preview_requested and preview_ok)
         if wanted and not self.streaming and now >= self._stream_block_until:
             try:
+                if hasattr(self.adapter, "record_max_s"):
+                    self.adapter.record_max_s = float(self.store.get("record_max_s") or 0)
                 await self.adapter.start_capture()
                 self.streaming = True
                 self.stream_error = None
@@ -462,6 +478,9 @@ class SensorManager:
             "samples_received": self.samples_received,
             "capture_mode": info.capture_mode,
             "record_progress": _f(getattr(self.adapter, "record_progress", None), 1),
+            "record_can_stop": self.record_can_stop(),
+            "record_max_s": float(self.store.get("record_max_s") or 0) or None,
+            "sensor_settings": dict(getattr(self.adapter, "sensor_settings", {}) or {}),
             "battery_percent": d.get("battery_percent"),
             "detail": {k: v for k, v in d.items() if isinstance(v, (str, int, float, bool)) or v is None},
         }

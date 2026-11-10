@@ -58,8 +58,9 @@ export function LiveChart({
         const p = pts[i];
         for (const v of [p.ax, p.ay, p.az, p.mag]) if (v !== null && Math.abs(v) > maxAbs) maxAbs = Math.abs(v);
       }
-      // Smoothly adapt the y scale; never below ±2 g, never above range + margin.
-      const target = Math.min(rangeG * 1.15, Math.max(2.5, maxAbs * 1.15));
+      // Smoothly adapt the y scale to the data; never below ±2 g. |a| can
+      // exceed the per-axis range (up to √3 × range), so allow for that.
+      const target = Math.min(rangeG * Math.sqrt(3) * 1.1, Math.max(2.5, maxAbs * 1.15));
       yMaxRef.current += (target - yMaxRef.current) * (target > yMaxRef.current ? 0.5 : 0.03);
       const yMax = yMaxRef.current;
       const yMin = -Math.min(yMax, Math.max(2, yMax * 0.5));
@@ -93,7 +94,7 @@ export function LiveChart({
         ctx.setLineDash([]);
         ctx.fillStyle = "rgba(239,68,68,0.9)";
         ctx.textAlign = "left";
-        ctx.fillText(`sensor limit ${rangeG} g`, padL + 6, Y(rangeG) - 9);
+        ctx.fillText(`per-axis limit ±${rangeG} g`, padL + 6, Y(rangeG) - 9);
       }
 
       if (!last || telemetry.msSinceLast() > 3000) {

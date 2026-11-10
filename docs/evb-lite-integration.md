@@ -2,7 +2,12 @@
 
 This document tracks what is **known**, what is **assumed from a related product**, what has been **observed on the real device**, and what is **still unknown** about the EVident Battery **EVB Lite** Wi-Fi accelerometer. It also contains the step-by-step procedure for integrating the sensor when it arrives.
 
-> **Status (2026-11-10): record mode verified.** The sensor portal's own traffic (HAR) and a real recording were captured from sensor `EVBS_V1F9L` (§3, evidence in `docs/evb-lite-evidence/`). `config/evb_profile.json` now drives **record mode** (Path B, automated): **ARM TEST** sends the portal's Record request, the sensor records for the time set in its portal, and the app analyzes the CSV it returns. The sensor's own CSV files are also recognized by the importer. **Live streaming (the portal's Stream button) is not verified yet**, so there is no live graph before a drop. No endpoint is hard-coded in the application code; everything comes from the profile.
+> **Status (2026-11-10): record mode verified, with STOP TEST.** Evidence from sensor `EVBS_V1F9L` is in §3 and `docs/evb-lite-evidence/`: the portal's traffic (HAR), a real recording, and the portal's own script `/js/index.js`. `config/evb_profile.json` drives **record mode** (Path B, automated):
+>
+> * **ARM TEST** sets the sensor's maximum recording time (Operator → Analysis → *EVB Lite: max test length*, default 60 s) and sends the portal's Record request.
+> * The test stays armed until the operator presses **STOP TEST**. That sends the portal's Stop request, and the sensor returns the recording, which the app analyzes.
+>
+> The sensor's own CSV files are also recognized by the importer. The portal's live WebSocket stream is identified but not used (§3). No endpoint is hard-coded in the application code; everything comes from the profile.
 
 ---
 
@@ -54,19 +59,22 @@ How the software uses this: the only behaviour relied on is that the device serv
 
 Evidence from 2026-11-10 (operator capture of sensor `EVBS_V1F9L`):
 
+* **Portal script** — `http://<sensor>/js/index.js`, saved from the sensor by the operator. It was inspected for the requests the portal makes. It is EVident's code, so it is not stored in this repository; function names are quoted below so the behaviour can be re-checked on a newer firmware.
+
 * **HAR** — `docs/evb-lite-evidence/portal-record-2026-11-10.har`: the portal's requests while pressing **Record** (1 s recording). Recorded with the page already open, so it holds no page/script loads and no Stream traffic.
 * **Recording** — `docs/evb-lite-evidence/EVBS_V1F9L_2026-11-10_16-58-48_90.csv`: the file the portal downloaded, sensor lying flat (assumed label up). Also used as the test fixture `backend/tests/fixtures/evb_lite_recording.csv`.
 
 | Item | Observed value | Evidence | Date / by |
 |---|---|---|---|
 | Model / hardware identifier | Device name `EVBS_V1F9L` | CSV file name, `/file_info` | 2026-11-10 / operator |
-| Firmware version | not reported in the captured traffic | — | |
+| Firmware version | reported by `GET /status` as `version` (shown in Operator → Sensor) | portal script `updateDeviceInfo` | 2026-11-10 |
 | Factory SSID | | | |
 | MAC address | | | |
 | IP address on UniFi (DHCP reservation?) | `192.168.2.11` (reservation not confirmed) | HAR | 2026-11-10 / operator |
 | Portal URL that works | `http://192.168.2.11/` (portal script `/js/index.js`) | HAR initiators | 2026-11-10 |
 | Portal requires login? | No (no cookies or auth headers) | HAR | 2026-11-10 |
 | Documented REST endpoints | none in the manual | Vibration Sensor User Manual | 2026-11-10 |
+| Requests the portal script makes | **Record:** `GET /start?format=csv` (`handleStartButton`). **Stop:** `GET /stop` → `{"status": …}` (`handleUniversalStop`); the open `/start` request then completes with the file. **Last file:** `GET /csv` (`downloadCsv`, `graphCsv`), `GET /file_info`. **Progress:** `GET /progress`. **Settings (read):** `GET /settings` → `{accel, gyro, temp, odr, accel_range, gyro_range, duration, gravity_comp}` (`fetchAllSettingsOnce`). **Settings (write):** `POST /duration?value=<s>`, sent only when the box loses focus or Enter is pressed (`bindDurationAutoSubmit`); also `POST /odr?value=`, `/accel_range?value=`, `/gyro_range?value=`, `/gravity_comp?value=`, `/collect?accel=…`. **Status:** `GET /status` → `Hostname`, `version`, `Battery SOC`, `Battery Charging`. **Live stream:** WebSocket `ws://<sensor>:81/`, send `START`/`STOP`; messages `{"type":"status","stream":"on"/"off"}` and one sample per message `{"t": <µs>, "ax", "ay", "az", …}`. The portal also streams during Record, for its live graph. Others: `/blink`, `/reboot`, `/clear_data`, `/upload`, `/wifi`, `/get-network`, `/save` | portal script | 2026-11-10 |
 | Endpoint(s) used by the portal (from DevTools) | **Record:** `GET /start?format=csv` → `302` to `http://<ip>:8000/start?format=csv`, which stays open while recording (1.1 s wait for a 1 s recording) and returns the CSV as an attachment (`Content-Disposition: EVBS_V1F9L_<date>_<time>_<n>.csv`). **Progress:** `GET /progress` → `{"progress": 0–100}` while recording, then `{"progress":100,"sending":0,"bytes_sent":…,"total_bytes":…}`, and `400 {"error":"Data collection not in progress"}` when idle. **Last file:** `GET /file_info` → `{"filename","date","duration":1.00,"size":56.494}` (size in KB). All `GET`, CORS `*`, `Connection: close`. | HAR | 2026-11-10 |
 | Response format and an example | CSV, header `Timestamp,Accel_X,Accel_Y,Accel_Z`, rows like `     570,-0.0383,-0.3111,-9.6766` (timestamp right-aligned to 8 characters, 4 decimals) | CSV | 2026-11-10 |
 | Acceleration units | **m/s²** (resting magnitude 9.666 m/s² = 0.986 g) | CSV | 2026-11-10 |
@@ -74,12 +82,12 @@ Evidence from 2026-11-10 (operator capture of sensor `EVBS_V1F9L`):
 | Timestamp field, unit and epoch | `Timestamp`, integer **µs since the start of the recording** (0 … 998 070 for `duration` 1.00 s) | CSV + `/file_info` | 2026-11-10 |
 | Timestamp resolution | 1 µs units; every step exactly 570 µs, all distinct | CSV | 2026-11-10 |
 | Effective sample rate actually delivered | **1,754 Hz** (1,752 samples in 1.0 s, no gaps) | CSV | 2026-11-10 |
-| Live (streaming) vs record-then-download | Record-then-download verified (above). Streaming exists in the portal but its traffic was not captured | HAR | 2026-11-10 |
-| Can range/rate be set programmatically (documented?) | Not documented; set them in the portal (Sensor Settings) | Manual §6.1 | |
+| Live (streaming) vs record-then-download | Record-then-download is used. A live WebSocket stream exists (above); its delivered sample rate is not measured, so it is not used for measurements | HAR + portal script | 2026-11-10 |
+| Can range/rate be set programmatically (documented?) | Yes, through the portal's own requests (above). The app only sets the **recording time**; range, rate and gravity compensation are read and checked, not changed | portal script | 2026-11-10 |
 | Range in use | ±16 g: value steps of 0.0047 m/s² = 0.48 mg match the manual's 0.488 mg resolution at ±16 g | CSV | 2026-11-10 |
 | Behaviour at ±16 g (flat clipping? wraps? flags?) | not tested yet | | |
 | Buffering during Wi-Fi interruption | Recordings are stored on the sensor (16 MB) and sent afterwards, so Wi-Fi dropouts during a recording should not lose samples (not tested) | Manual §6.3 | |
-| Battery level reported? where? | not in the captured traffic | | |
+| Battery level reported? where? | `GET /status` → `Battery SOC` (percent) and `Battery Charging` | portal script `updateBatteryStatus` | 2026-11-10 |
 | Time to reconnect after power cycle | | | |
 
 ## 4. Unknowns requiring testing
@@ -216,21 +224,34 @@ What the adapter does with the profile (`backend/app/sensors/evb_lite.py`):
     "path": "/start",                 // redirects to :8000, answers with the recording
     "query": { "format": "csv" },
     "documented_in": "Manual §6.3 + docs/evb-lite-evidence/portal-record-2026-11-10.har",
-    "timeout_s": 120,                 // must exceed the portal's recording time + download
+    "timeout_s": 120,                 // minimum; raised automatically to 2.5 × recording time + 30 s
     "progress_path": "/progress",     // optional; {"progress": 0-100}
-    "progress_field": "progress"
+    "progress_field": "progress",
+    "stop": { "method": "GET", "path": "/stop", "documented_in": "…" },   // STOP TEST
+    "download_path": "/csv",          // fallback if /start fails after a stop
+    "settings": { "path": "/settings",  // read-only; checked before every test
+                  "fields": { "duration_s": "duration", "accel_range_g": "accel_range",
+                              "gravity_comp": "gravity_comp", "sample_rate_hz": "odr" } },
+    "set_duration": { "method": "POST", "path": "/duration", "param": "value", "documented_in": "…" }
   }
 }
 ```
 
 The `samples` section then describes the recording's format (`"format": "csv"`, `csv.columns`, `timestamp_unit`, `accel_unit`). What happens on **ARM TEST** (`EVBLiteAdapter` record mode + `CaptureService`):
 
-1. The app sends the record request. The sensor starts recording for the **recording time set in its portal** (Sensor Settings).
-2. *Baseline*: "hold the lander still" until `/progress` shows that the recording has started, plus `baseline_s` (0.4 s).
-3. *Armed*: **RELEASE THE LANDER!** with the recording progress bar.
-4. When the recording ends, the CSV arrives, is kept verbatim as the test's raw payload, and is analyzed as a whole. The impact is found by the analysis, as for a CSV import.
+1. The app reads `/settings`. If **gravity compensation is on**, it refuses to arm and says so, because the analysis needs the 1 g resting reading. The reported `accel_range` becomes the saturation limit.
+2. If the sensor's recording time differs from *EVB Lite: max test length* (default 60 s; 0 = leave it alone), the app sets it with `POST /duration?value=…`. This is the only setting the app changes. It exists because the portal saves the box only on Enter or focus loss, which is easy to miss.
+3. The app sends the record request.
+4. *Baseline*: "hold the lander still" until `/progress` shows that the recording has started, plus `baseline_s` (0.4 s).
+5. *Armed*: **RELEASE THE LANDER!** with a seconds counter. This stays as long as needed.
+6. **STOP TEST** (or Space) sends `GET /stop`. The sensor ends the recording and the open `/start` request delivers it. If that response fails, the app downloads `/csv` instead. If nobody presses STOP, the test ends at the maximum recording time.
+7. The CSV is kept verbatim as the test's raw payload and analyzed as a whole. The impact is found by the analysis, as for a CSV import.
 
-Notes: the live preview never starts a recording. CAPTURE and STOP are not available in this mode, because the window is fixed. **Cancel** abandons the test, but no stop request is known yet, so the sensor finishes its recording anyway. Each recording overwrites the previous one on the sensor.
+Notes:
+* The live preview never starts a recording, and CAPTURE is not available in this mode.
+* **Cancel** also sends `/stop`, so the sensor is not left recording.
+* Each recording overwrites the previous one on the sensor.
+* The sensor sends about 110 KB/s, so the download after STOP takes about half as long as the recording at 1.7 kHz.
 
 The manual workflow also still works:
 

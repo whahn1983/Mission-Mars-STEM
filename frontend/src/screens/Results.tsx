@@ -8,6 +8,16 @@ import { fmtG, fmtHeight, fmtMass, fmtNum, ORIGIN_LABEL, SOURCE_LABEL } from "..
 import { describePrediction, measuredCategory, predictionVerdict } from "../lib/predict";
 import { useStore } from "../state/store";
 
+/** "the Z axis" / "the X and Z axes" from per-axis saturation counts. */
+function clippedAxes(counts: Record<string, number> | undefined): string {
+  const axes = Object.entries(counts ?? {})
+    .filter(([, n]) => n > 0)
+    .map(([k]) => k.toUpperCase());
+  if (axes.length === 0) return "at least one axis";
+  if (axes.length === 1) return `the ${axes[0]} axis`;
+  return `the ${axes.slice(0, -1).join(", ")} and ${axes[axes.length - 1]} axes`;
+}
+
 function useCountUp(target: number | null, ms = 1200) {
   const [v, setV] = useState(0);
   useEffect(() => {
@@ -158,8 +168,11 @@ export function Results() {
             </div>
           ) : test.saturated ? (
             <div className="pop-in py-2">
-              <div className="font-mono text-7xl font-black text-red-300">&gt; {range} g</div>
+              <div className="font-mono text-7xl font-black text-red-300">
+                {test.observed_max_g != null ? <>≥ {test.observed_max_g.toFixed(1)}</> : <>&gt; {range}</>} g
+              </div>
               <div className="mt-1 font-display text-lg tracking-widest text-red-300">OVER SENSOR RANGE</div>
+              <div className="mt-1 text-xs text-red-200/80">The real peak was at least this high.</div>
             </div>
           ) : (
             <div className="pop-in py-4 font-display text-3xl font-black text-red-300">NO VALID IMPACT</div>
@@ -185,7 +198,11 @@ export function Results() {
         <Panel title="Prediction vs measured">
           <div className="grid grid-cols-2 gap-2">
             <Stat label="You predicted" value={describePrediction(test.prediction_kind ? { kind: test.prediction_kind as "number", label: test.prediction_label, value_g: test.predicted_peak_g } : null)} />
-            <Stat label="Measured" value={peak !== null ? fmtG(peak) : test.saturated ? `> ${range} g` : "—"} tone={peak !== null ? "default" : "alert"} />
+            <Stat
+              label="Measured"
+              value={peak !== null ? fmtG(peak) : test.saturated ? (test.observed_max_g != null ? `≥ ${test.observed_max_g.toFixed(1)} g` : `> ${range} g`) : "—"}
+              tone={peak !== null ? "default" : "alert"}
+            />
           </div>
           {verdict && <div className={`mt-3 rounded-xl px-3 py-2 text-lg font-semibold ${verdict.good ? "bg-go/10 text-green-200" : "bg-space-850 text-slate-200"}`}>{verdict.text}</div>}
         </Panel>
@@ -194,7 +211,9 @@ export function Results() {
           <div className="rounded-2xl border-2 border-alert/60 bg-red-950/40 p-4 text-red-100">
             <div className="font-display text-sm tracking-widest">⚠ SENSOR SATURATED</div>
             <p className="mt-1 text-sm">
-              At least one axis reached the ±{range} g limit, so the true peak may be higher than {fmtG(test.observed_max_g)}. This test is not used in rankings. Try a lower drop height or more cushioning.
+              The sensor measures each axis (X, Y, Z) up to ±{range} g, and {clippedAxes(a.saturation?.per_axis_counts)} reached that limit. The graph shows |a|, which combines
+              all three axes, so it can read above {range} g ({fmtG(test.observed_max_g)} here). Because an axis was cut off at its limit, the real peak was higher
+              still, so this test is not used in rankings. Try a lower drop height or more cushioning.
             </p>
           </div>
         )}
