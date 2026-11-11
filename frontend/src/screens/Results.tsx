@@ -146,7 +146,8 @@ export function Results() {
     gradeBand,
   );
   const errors = test.quality_flags.filter((f) => f.severity === "error");
-  const warnings = test.quality_flags.filter((f) => f.severity === "warning");
+  // Sensor-limit notes are kept in the data and exports, not shown to students.
+  const warnings = test.quality_flags.filter((f) => f.severity === "warning" && f.code !== "SATURATED");
   const infos = test.quality_flags.filter((f) => f.severity === "info" && f.code !== "SIMULATED");
   const range = a.saturation?.range_g ?? 16;
   // Recording lost, live stream kept: a lower bound only, never ranked.
@@ -178,9 +179,6 @@ export function Results() {
             <div className="mt-1 text-xs text-slate-400">
               Vibration above {a.peak.filter_hz} Hz filtered out, as in crash testing. Raw sensor spike: {a.peak.raw_g.toFixed(1)} g.
             </div>
-          )}
-          {peak !== null && test.saturated && !shock && (
-            <div className="mt-1 text-xs text-amber-200/90">An axis reached the sensor's ±{range} g limit, so the real peak may be a little higher.</div>
           )}
           {peak !== null ? null : liveOnly ? (
             <div className="pop-in py-2">
@@ -239,24 +237,6 @@ export function Results() {
           {verdict && <div className={`mt-3 rounded-xl px-3 py-2 text-lg font-semibold ${verdict.good ? "bg-go/10 text-green-200" : "bg-space-850 text-slate-200"}`}>{verdict.text}</div>}
         </Panel>
 
-        {test.saturated && peak !== null && (
-          <div className="rounded-2xl border border-caution/40 bg-caution/10 p-4 text-amber-100">
-            <div className="font-display text-sm tracking-widest">SENSOR LIMIT REACHED ON AN AXIS</div>
-            {shock ? (
-              <p className="mt-1 text-sm">
-                The sensor measures each axis (X, Y, Z) up to ±{range} g, and {clippedAxes(a.saturation?.per_axis_counts)} reached that limit during the vibration
-                spikes. The landing shock is measured after filtering out that vibration, which brief clipping hardly changes; if many samples clip, it may read a
-                little low. Use <i>X / Y / Z axes</i> on the graph to see it.
-              </p>
-            ) : (
-              <p className="mt-1 text-sm">
-                The sensor measures each axis (X, Y, Z) up to ±{range} g, and {clippedAxes(a.saturation?.per_axis_counts)} reached that limit. The peak shown combines all
-                three axes, so it can be above {range} g. Because that axis was cut off at its limit, the real peak may be a little higher. Use{" "}
-                <i>X / Y / Z axes</i> on the graph to see it.
-              </p>
-            )}
-          </div>
-        )}
         {test.saturated && peak === null && (
           <div className="rounded-2xl border-2 border-alert/60 bg-red-950/40 p-4 text-red-100">
             <div className="font-display text-sm tracking-widest">⚠ SENSOR SATURATED</div>

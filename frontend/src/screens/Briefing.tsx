@@ -79,7 +79,6 @@ export function Briefing() {
         <div className="pointer-events-none absolute left-4 top-4 font-mono text-xs leading-5 text-telemetry/70">
           <div>TARGET: JEZERO-ANALOG TEST SITE</div>
           <div>PAYLOAD: 3-AXIS ACCELEROMETER</div>
-          <div>SENSOR RANGE: ±16 g</div>
         </div>
       </div>
     </div>

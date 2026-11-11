@@ -105,7 +105,7 @@ The EVB Lite range is ±16 g **per axis**.
 * Vector magnitude is deliberately not used for this. 12 g on X plus 12 g on Y gives |a| ≈ 17 g without clipping.
 * By default (*Over-range makes a test invalid* off, `quality.saturation_invalidates = false`), a saturated test:
   * gets the `SATURATED` **warning** and stays **valid**
-  * reports the measured |a| peak as usual. |a| combines all three axes, so it can be above 16 g, up to √3 × 16 ≈ 27.7 g when all three clip. Because an axis was cut off, the real peak may be a little higher; the report says so.
+  * reports the measured |a| peak as usual. |a| combines all three axes, so it can be above 16 g, up to √3 × 16 ≈ 27.7 g when all three clip. Because an axis was cut off, the real peak may be a little higher. The student-facing screens do not show this (the station is a demonstration); the `SATURATED` note stays in the test data and the exports.
   * is ranked like any other valid test, and counted as "over range" in comparisons
   * this default fits the EVB Lite drops measured at the station (2026-11-10), which typically read 17–29 g
 * With *Over-range makes a test invalid* on (Operator → Analysis), a saturated test:
