@@ -149,7 +149,7 @@ function StationTab({ settings, reload }: { settings: Record<string, unknown>; r
             label="Students may change the drop height (simulation only)"
           />
           <p className="text-xs text-slate-500">
-            Physical tests always use the height set here. Keep drops low enough that the ±16 g sensor does not saturate (see docs: drop-height planning).
+            Physical tests always use the height set here.
           </p>
         </div>
       </Panel>
@@ -668,7 +668,6 @@ function DataTab() {
                   <td className="pr-3 text-right font-mono">{t.measured_peak_g != null ? fmtG(t.measured_peak_g, 2) : t.saturated ? `>${fmtG(t.observed_max_g, 1)}` : "—"}</td>
                   <td className="pl-1">
                     {t.valid ? <Badge tone="go">valid</Badge> : <Badge tone="muted">invalid</Badge>}
-                    {t.saturated && <Badge tone="caution">axis at limit</Badge>}
                     {t.excluded && <Badge tone="caution">excluded</Badge>}
                   </td>
                   <td className="whitespace-nowrap text-right">

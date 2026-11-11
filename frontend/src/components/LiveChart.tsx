@@ -83,20 +83,6 @@ export function LiveChart({
         ctx.fillStyle = "rgba(148,163,184,0.8)";
         ctx.fillText(`${g}g`, padL - 6, Y(g));
       }
-      // sensor range lines
-      if (yMax > rangeG * 0.8) {
-        ctx.setLineDash([6, 6]);
-        ctx.strokeStyle = "rgba(239,68,68,0.7)";
-        ctx.beginPath();
-        ctx.moveTo(padL, Y(rangeG));
-        ctx.lineTo(w - 8, Y(rangeG));
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.fillStyle = "rgba(239,68,68,0.9)";
-        ctx.textAlign = "left";
-        ctx.fillText(`per-axis limit ±${rangeG} g`, padL + 6, Y(rangeG) - 9);
-      }
-
       if (!last || telemetry.msSinceLast() > 3000) {
         ctx.fillStyle = "rgba(148,163,184,0.7)";
         ctx.textAlign = "center";

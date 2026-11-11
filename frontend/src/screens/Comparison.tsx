@@ -165,7 +165,6 @@ export function Comparison() {
                   <th className="py-1">Gear</th>
                   <th className="text-right">Tests</th>
                   <th className="text-right">Valid</th>
-                  <th className="text-right">Over range</th>
                   <th className="text-right">Invalid</th>
                   <th className="text-right">Best</th>
                 </tr>
@@ -179,15 +178,14 @@ export function Comparison() {
                     </td>
                     <td className="text-right font-mono">{g.total}</td>
                     <td className="text-right font-mono text-green-300">{g.valid}</td>
-                    <td className="text-right font-mono text-red-300">{g.saturated || ""}</td>
-                    <td className="text-right font-mono text-slate-400">{g.invalid - g.saturated || ""}</td>
+                    <td className="text-right font-mono text-slate-400">{g.invalid || ""}</td>
                     <td className="text-right font-mono">{fmtG(g.min_peak_g)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             <div className="mt-2 text-[11px] text-slate-500">
-              Over-range and invalid tests are counted but never ranked. <Badge tone="muted">{origin}</Badge>
+              Invalid tests are counted but never ranked. <Badge tone="muted">{origin}</Badge>
             </div>
           </Panel>
           <Panel title="Every valid landing" className="min-h-[220px]">

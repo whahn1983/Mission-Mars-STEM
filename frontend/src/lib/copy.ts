@@ -27,7 +27,7 @@ export const BRIEFING = {
   },
   "912": {
     lead: "Your mission is to design a lander that protects its scientific payload during touchdown.",
-    body: "Trade off energy absorption, rebound and mass. A 3-axis accelerometer (±16 g) measures the landing; you analyze peak specific force, pulse width and data quality.",
+    body: "Trade off energy absorption, rebound and mass. A 3-axis accelerometer measures the landing; you analyze peak specific force, pulse width and data quality.",
     reqs: [
       { title: "Protect the payload", body: "Keep the instrument mounted and intact through impact." },
       { title: "Minimize landing shock", body: "Minimize peak specific force measured at the payload." },

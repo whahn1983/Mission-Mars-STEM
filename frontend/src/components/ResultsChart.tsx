@@ -3,7 +3,7 @@ import { CartesianGrid, ComposedChart, Legend, Line, ReferenceArea, ReferenceLin
 import type { Series } from "../api/types";
 import { Segmented } from "./ui";
 
-export function ResultsChart({ series, peak, saturated, rangeG = 16 }: { series: Series; peak: number | null; saturated: boolean; rangeG?: number }) {
+export function ResultsChart({ series, peak }: { series: Series; peak: number | null; saturated?: boolean; rangeG?: number }) {
   const [view, setView] = useState<"impact" | "full">("impact");
   const [axes, setAxes] = useState(false);
   // When the filtered line is the reported landing shock, it is the main line
@@ -27,8 +27,7 @@ export function ResultsChart({ series, peak, saturated, rangeG = 16 }: { series:
     view === "full" || m.peak_ms == null
       ? ["dataMin", "dataMax"]
       : [Math.max(series.t_ms[0] ?? -300, Math.min(-120, (m.freefall_start_ms ?? -150) - 40)), Math.min(series.t_ms[series.t_ms.length - 1] ?? 600, 450)];
-  // Scale to the data, not to the sensor range: |a| combines three axes, so
-  // it can read above the per-axis limit (up to √3 × range when all clip).
+  // Scale to the data.
   const dataMax = useMemo(() => {
     let mag = 0;
     let axis = 0;
@@ -39,7 +38,7 @@ export function ResultsChart({ series, peak, saturated, rangeG = 16 }: { series:
     }
     return { mag, axis };
   }, [series]);
-  const top = Math.max(peak ?? 0, dataMax.mag, axes ? dataMax.axis : 0, saturated && axes ? rangeG : 0, 3.5);
+  const top = Math.max(peak ?? 0, dataMax.mag, axes ? dataMax.axis : 0, 3.5);
   const maxY = Math.ceil((top * 1.1) / 2) * 2;
   const minY = axes ? -Math.max(2, Math.ceil((dataMax.axis * 1.1) / 2) * 2) : 0;
 
@@ -90,12 +89,7 @@ export function ResultsChart({ series, peak, saturated, rangeG = 16 }: { series:
               <ReferenceArea x1={m.impact_start_ms} x2={m.impact_end_ms} fill="#f97316" fillOpacity={0.1} />
             )}
             <ReferenceLine y={1} stroke="#64748b" strokeDasharray="4 4" label={{ value: "1 g (at rest)", fill: "#64748b", fontSize: 11, position: "insideBottomRight" }} />
-            {/* The sensor limit applies to each axis, not to |a|: show it only with the X/Y/Z traces. */}
-            {saturated && axes && (
-              <ReferenceLine y={rangeG} stroke="#ef4444" strokeDasharray="6 4" label={{ value: `per-axis limit ±${rangeG} g`, fill: "#fca5a5", fontSize: 12, position: "insideTopRight" }} />
-            )}
-            {saturated && axes && <ReferenceLine y={-rangeG} stroke="#ef4444" strokeDasharray="6 4" />}
-            {!saturated && peak != null && m.peak_ms != null && <ReferenceLine x={m.peak_ms} stroke="#f97316" strokeDasharray="3 3" />}
+            {peak != null && m.peak_ms != null && <ReferenceLine x={m.peak_ms} stroke="#f97316" strokeDasharray="3 3" />}
             {(m.rebounds_ms ?? []).map((r, i) => (r != null ? <ReferenceLine key={i} x={r} stroke="#f59e0b" strokeDasharray="2 4" label={{ value: "rebound", fill: "#fcd34d", fontSize: 11, position: "top" }} /> : null))}
             {axes && <Line dataKey="ax" name="X" stroke="#f472b6" dot={false} strokeWidth={1.2} isAnimationActive={false} connectNulls={false} />}
             {axes && <Line dataKey="ay" name="Y" stroke="#a3e635" dot={false} strokeWidth={1.2} isAnimationActive={false} connectNulls={false} />}

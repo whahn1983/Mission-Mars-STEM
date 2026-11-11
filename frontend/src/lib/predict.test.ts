@@ -19,7 +19,7 @@ describe("prediction helpers", () => {
     expect(opts[2].payload.high_g).toBeNull();
   });
 
-  it("adds an open-ended over-range option for grades 5–8", () => {
+  it("adds an open-ended top option for grades 5–8", () => {
     const opts = rangeOptions([
       [0, 2],
       [2, 4],
