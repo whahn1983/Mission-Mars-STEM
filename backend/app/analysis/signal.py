@@ -244,15 +244,56 @@ def detect_saturation(ax, ay, az, *, range_g: float = 16.0, margin_fraction: flo
 # Display filtering (never used to compute the reported peak)
 # ---------------------------------------------------------------------------
 
+def can_lowpass(sample_rate_hz: float | None, cutoff_hz: float, n: int) -> bool:
+    return bool(sample_rate_hz) and cutoff_hz > 0 and sample_rate_hz > 2.5 * cutoff_hz and n >= 30
+
+
+# SAE J211-1 channel filter: a 2-pole Butterworth applied forward and backward
+# (4-pole, zero phase), designed at 2.0775 × CFC, which puts the combined
+# -3 dB point at F_H = CFC / 0.6 (CFC 60 → 100 Hz). Design corner = 1.2465 × F_H.
+J211_DESIGN_FACTOR = 2.0775 * 0.6
+
+
+def j211_lowpass_axes(ax, ay, az, sample_rate_hz: float | None, f3db_hz: float):
+    """Crash-test (SAE J211 CFC) low-pass of each axis, before the magnitude
+    is taken, or None if the data cannot be filtered at this frequency.
+    Filtering |a| directly would turn back-and-forth ringing into a false
+    offset, so the axes are filtered first."""
+    design = J211_DESIGN_FACTOR * f3db_hz
+    if not can_lowpass(sample_rate_hz, design, int(np.asarray(ax).size)):
+        return None
+    from scipy.signal import butter
+
+    sos = butter(2, design, btype="low", fs=sample_rate_hz, output="sos")
+    return tuple(_filtfilt_runs(np.asarray(v, dtype=np.float64), sos) for v in (ax, ay, az))
+
+
+def _filtfilt_runs(x: np.ndarray, sos) -> np.ndarray:
+    """Zero-phase filter each contiguous finite run; NaN stays NaN."""
+    from scipy.signal import sosfiltfilt
+
+    out = np.full_like(x, np.nan)
+    idx = np.nonzero(np.isfinite(x))[0]
+    if idx.size == 0:
+        return out
+    breaks = np.nonzero(np.diff(idx) > 1)[0]
+    starts = np.concatenate(([0], breaks + 1))
+    ends = np.concatenate((breaks + 1, [idx.size]))
+    for s, e in zip(starts, ends):
+        run = idx[s:e]
+        out[run] = sosfiltfilt(sos, x[run]) if run.size > 27 else x[run]
+    return out
+
+
 def lowpass_for_display(values, sample_rate_hz: float | None, cutoff_hz: float = 100.0) -> tuple[np.ndarray, str]:
-    """Zero-phase 4th-order Butterworth low-pass, for display only.
+    """Zero-phase 4th-order Butterworth low-pass.
 
     Returns the filtered array and a human-readable description of the
     method. NaN samples are left as NaN (not interpolated) so missing data
     remains visible.
     """
     x = np.asarray(values, dtype=np.float64)
-    if sample_rate_hz is None or sample_rate_hz <= 2.5 * cutoff_hz or x.size < 30:
+    if not can_lowpass(sample_rate_hz, cutoff_hz, x.size):
         return x.copy(), "none (sample rate too low or too few samples for filtering)"
     from scipy.signal import butter, sosfiltfilt
 

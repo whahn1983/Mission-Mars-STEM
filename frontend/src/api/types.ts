@@ -235,6 +235,15 @@ export interface TestDetail extends TestSummary {
       duration_s: number;
     };
     saturation?: { saturated: boolean; range_g: number; per_axis_counts: Record<string, number> };
+    /** How the reported peak was measured (landing shock = each axis low-passed, SAE J211). */
+    peak?: {
+      method: string;
+      filter_hz: number | null;
+      raw_g: number | null;
+      filtered_g: number | null;
+      pulse_width_ms: number | null;
+      samples_in_pulse: number | null;
+    };
     detection?: {
       impact_detected: boolean;
       peak_g: number | null;
@@ -289,6 +298,8 @@ export interface Series {
   mag: (number | null)[];
   mag_filtered: (number | null)[];
   filter_method: string;
+  /** mag_filtered is the reported landing shock (not just display smoothing). */
+  filter_is_peak?: boolean;
   markers: {
     peak_ms?: number | null;
     impact_start_ms?: number | null;
