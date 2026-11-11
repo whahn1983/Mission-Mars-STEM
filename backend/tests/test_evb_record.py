@@ -695,3 +695,20 @@ def test_old_max_test_length_setting_is_replaced(database, env):
     st = SettingsStore(database, env)
     st.load()
     assert "record_max_s" not in st.all() and st.get("record_window_s") == 10
+
+
+def test_untouched_old_defaults_are_upgraded_but_edits_are_kept(database, env):
+    from app.models import SettingRow
+    from app.services.settings_store import OLD_DEFAULTS, SettingsStore
+
+    with database.session() as s:
+        s.add(SettingRow(key="criteria", value_json=OLD_DEFAULTS["criteria"][0]))
+        s.add(SettingRow(key="prediction_ranges_g", value_json=[[0, 5], [5, 25]]))  # edited by the operator
+    st = SettingsStore(database, env)
+    st.load()
+    c = st.get("criteria")
+    assert c["success_max_peak_g"] == 12.0 and c["gentle_max_g"] == 6.0 and c["medium_max_g"] == 12.0
+    assert st.get("prediction_ranges_g") == [[0, 5], [5, 25]]
+    st2 = SettingsStore(database, env)
+    st2.load()
+    assert st2.get("criteria")["success_max_peak_g"] == 12.0, "the upgrade is saved"

@@ -163,15 +163,16 @@ DEFAULT_SETTINGS: dict = {
     "quality": {},
     # Classroom challenge criteria (not engineering safety limits)
     "criteria": {
-        "success_max_peak_g": 8.0,
+        # Fits EVB Lite landing shocks at the station (about 10 g from 13–14 cm).
+        "success_max_peak_g": 12.0,
         "mass_budget_kg": 0.35,
         "require_payload_retained": True,
         "require_stable_landing": True,
-        "gentle_max_g": 4.0,
-        "medium_max_g": 8.0,
+        "gentle_max_g": 6.0,
+        "medium_max_g": 12.0,
     },
     # Grades 5–8 prediction ranges (g)
-    "prediction_ranges_g": [[0, 2], [2, 4], [4, 6], [6, 8], [8, 12], [12, 16]],
+    "prediction_ranges_g": [[0, 4], [4, 8], [8, 12], [12, 16], [16, 20]],
     # Simulation
     "sim_gravity": "earth",  # earth | mars
     "sim_use_fixed_seed": False,

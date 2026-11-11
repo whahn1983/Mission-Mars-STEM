@@ -150,14 +150,16 @@ The primary result is the **measured peak in g**. The simple mission outcome for
 
 | Outcome | Rule (defaults, editable) |
 |---|---|
-| Successful landing | valid **and** peak ≤ 8 g **and** mass ≤ 350 g **and** the operator did not mark "payload moved" or "tipped over" |
+| Successful landing | valid **and** landing shock ≤ 12 g **and** mass ≤ 350 g **and** the operator did not mark "payload moved" or "tipped over" |
 | Needs improvement | valid but any criterion missed |
 | Invalid test — try again | not valid (no impact, data gaps, …; saturated only with *Over-range makes a test invalid* on) |
 
 Predictions:
 
-* Grades 1–4: Gentle (< 4 g), Medium (4–8 g), Hard (≥ 8 g); the edges are editable.
-* Grades 5–8: g ranges (0–2, 2–4, 4–6, 6–8, 8–12, 12–16, 16+). Upper bounds are exclusive.
+* Grades 1–4: Gentle (< 6 g), Medium (6–12 g), Hard (≥ 12 g); the edges are editable.
+* Grades 5–8: g ranges (0–4, 4–8, 8–12, 12–16, 16–20, 20+). Upper bounds are exclusive.
+
+The defaults (12 g success, 6 / 12 g categories, ranges to 20 g) fit the EVB Lite landing shocks measured at the station: about 10 g for a 13–14 cm drop. They were 8 g, 4 / 8 g and ranges to 16 g before. On start-up, a station whose criteria or ranges are still exactly at those old defaults is moved to the new ones; values an operator has changed are kept.
 * Grades 9–12: a number. The app shows the error in g and % (it counts as "close" when within max(1 g, 15 %)).
 
 ## 8. Drop-height planning (important for the physical station)

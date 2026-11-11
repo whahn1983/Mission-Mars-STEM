@@ -11,13 +11,13 @@ from dataclasses import asdict, dataclass
 
 @dataclass
 class ChallengeCriteria:
-    success_max_peak_g: float = 8.0
+    success_max_peak_g: float = 12.0
     mass_budget_kg: float = 0.40
     require_payload_retained: bool = True
     require_stable_landing: bool = True
     # Grades 1–4 prediction buckets (g): gentle < gentle_max ≤ medium < medium_max ≤ hard
-    gentle_max_g: float = 4.0
-    medium_max_g: float = 8.0
+    gentle_max_g: float = 6.0
+    medium_max_g: float = 12.0
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "ChallengeCriteria":
