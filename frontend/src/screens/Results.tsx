@@ -130,6 +130,11 @@ export function Results() {
 
   const a = test.analysis;
   const det = a.detection;
+  // The reported peak is the landing shock (vibration filtered out); the raw
+  // spike is shown as a second number.
+  const shock = a.peak?.method === "lowpass";
+  const pulseMs = shock ? a.peak?.pulse_width_ms : det?.pulse_width_ms;
+  const pulseSamples = shock ? a.peak?.samples_in_pulse : det?.samples_in_pulse;
   const phys = a.physics;
   const samp = a.sampling;
   const outcome = OUTCOME[test.outcome];
@@ -162,14 +167,19 @@ export function Results() {
               {ORIGIN_LABEL[test.data_origin]}
             </div>
           )}
-          <div className="font-display text-sm tracking-[0.3em] text-telemetry">PEAK IMPACT ACCELERATION</div>
+          <div className="font-display text-sm tracking-[0.3em] text-telemetry">{shock ? "LANDING SHOCK" : "PEAK IMPACT ACCELERATION"}</div>
           {peak !== null ? (
             <div className="pop-in font-mono text-8xl font-black text-white glow-cyan">
               {shown.toFixed(1)}
               <span className="ml-2 text-5xl text-telemetry">g</span>
             </div>
           ) : null}
-          {peak !== null && test.saturated && (
+          {peak !== null && shock && a.peak?.raw_g != null && a.peak.raw_g > peak + 0.05 && (
+            <div className="mt-1 text-xs text-slate-400">
+              Vibration above {a.peak.filter_hz} Hz filtered out, as in crash testing. Raw sensor spike: {a.peak.raw_g.toFixed(1)} g.
+            </div>
+          )}
+          {peak !== null && test.saturated && !shock && (
             <div className="mt-1 text-xs text-amber-200/90">An axis reached the sensor's ±{range} g limit, so the real peak may be a little higher.</div>
           )}
           {peak !== null ? null : liveOnly ? (
@@ -232,11 +242,19 @@ export function Results() {
         {test.saturated && peak !== null && (
           <div className="rounded-2xl border border-caution/40 bg-caution/10 p-4 text-amber-100">
             <div className="font-display text-sm tracking-widest">SENSOR LIMIT REACHED ON AN AXIS</div>
-            <p className="mt-1 text-sm">
-              The sensor measures each axis (X, Y, Z) up to ±{range} g, and {clippedAxes(a.saturation?.per_axis_counts)} reached that limit. The peak shown combines all
-              three axes, so it can be above {range} g. Because that axis was cut off at its limit, the real peak may be a little higher. Use{" "}
-              <i>X / Y / Z axes</i> on the graph to see it.
-            </p>
+            {shock ? (
+              <p className="mt-1 text-sm">
+                The sensor measures each axis (X, Y, Z) up to ±{range} g, and {clippedAxes(a.saturation?.per_axis_counts)} reached that limit during the vibration
+                spikes. The landing shock is measured after filtering out that vibration, which brief clipping hardly changes; if many samples clip, it may read a
+                little low. Use <i>X / Y / Z axes</i> on the graph to see it.
+              </p>
+            ) : (
+              <p className="mt-1 text-sm">
+                The sensor measures each axis (X, Y, Z) up to ±{range} g, and {clippedAxes(a.saturation?.per_axis_counts)} reached that limit. The peak shown combines all
+                three axes, so it can be above {range} g. Because that axis was cut off at its limit, the real peak may be a little higher. Use{" "}
+                <i>X / Y / Z axes</i> on the graph to see it.
+              </p>
+            )}
           </div>
         )}
         {test.saturated && peak === null && (
@@ -339,7 +357,7 @@ export function Results() {
               <Stat label="Ideal impact speed" value={fmtNum(phys.impact_speed_m_s, 2, "m/s")} sub="v = √(2gh)" />
               <Stat label="Potential energy" value={fmtNum(phys.potential_energy_j, 2, "J")} sub={`E = mgh · m = ${fmtMass(test.mass_kg)}`} />
               <Stat label="Free fall (measured)" value={det?.freefall ? fmtNum(det.freefall.duration_ms, 0, "ms") : "—"} sub={det?.freefall ? `≈ ${fmtHeight(det.freefall.estimated_drop_height_m)} drop (½gt²)` : "not detected"} />
-              <Stat label="Impact pulse width" value={fmtNum(det?.pulse_width_ms, 1, "ms")} sub={det?.samples_in_pulse ? `${det.samples_in_pulse} samples above half peak` : undefined} />
+              <Stat label="Impact pulse width" value={fmtNum(pulseMs, 1, "ms")} sub={pulseSamples ? `${pulseSamples} samples above half peak` : undefined} />
               {gradeBand === "912" && (
                 <>
                   <Stat label="Gravity-compensated peak" value={fmtG(test.gravity_comp_peak_g)} sub="estimate: |a − a_rest|" />

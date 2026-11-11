@@ -667,7 +667,8 @@ function DataTab() {
                   <td>{fmtHeight(t.drop_height_m)}</td>
                   <td className="pr-3 text-right font-mono">{t.measured_peak_g != null ? fmtG(t.measured_peak_g, 2) : t.saturated ? `>${fmtG(t.observed_max_g, 1)}` : "—"}</td>
                   <td className="pl-1">
-                    {t.saturated ? <Badge tone="alert">over range</Badge> : t.valid ? <Badge tone="go">valid</Badge> : <Badge tone="muted">invalid</Badge>}
+                    {t.valid ? <Badge tone="go">valid</Badge> : <Badge tone="muted">invalid</Badge>}
+                    {t.saturated && <Badge tone="caution">axis at limit</Badge>}
                     {t.excluded && <Badge tone="caution">excluded</Badge>}
                   </td>
                   <td className="whitespace-nowrap text-right">
@@ -747,6 +748,12 @@ function AnalysisTab({ settings, reload }: { settings: Record<string, unknown>; 
           <NumberField label="Post-trigger window (s)" value={settings.post_trigger_s} onSave={(v) => save({ post_trigger_s: v })} />
           <NumberField label="Baseline duration (s)" value={settings.baseline_s} onSave={(v) => save({ baseline_s: v })} />
           <NumberField label="Arm timeout (s)" value={settings.arm_timeout_s} onSave={(v) => save({ arm_timeout_s: v })} />
+          <NumberField
+            label="Landing-shock filter (Hz)"
+            value={quality.peak_filter_hz ?? 100}
+            onSave={(v) => saveQuality("peak_filter_hz", v)}
+            hint="The reported peak ignores vibration faster than this (crash-test practice, SAE J211 CFC 60 = 100 Hz). 0 = raw sensor peak."
+          />
           <NumberField
             label="EVB Lite: test length (s)"
             value={settings.record_window_s}

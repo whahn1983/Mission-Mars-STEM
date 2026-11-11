@@ -6,7 +6,10 @@ import { Segmented } from "./ui";
 export function ResultsChart({ series, peak, saturated, rangeG = 16 }: { series: Series; peak: number | null; saturated: boolean; rangeG?: number }) {
   const [view, setView] = useState<"impact" | "full">("impact");
   const [axes, setAxes] = useState(false);
-  const [filtered, setFiltered] = useState(false);
+  // When the filtered line is the reported landing shock, it is the main line
+  // and the raw (vibration-included) trace is drawn faintly behind it.
+  const shock = !!series.filter_is_peak;
+  const [filtered, setFiltered] = useState(shock);
   const data = useMemo(
     () =>
       series.t_ms.map((t, i) => ({
@@ -57,7 +60,7 @@ export function ResultsChart({ series, peak, saturated, rangeG = 16 }: { series:
             X / Y / Z axes
           </button>
           <button type="button" onClick={() => setFiltered((v) => !v)} className={`rounded-lg px-2.5 py-1 text-xs font-semibold ${filtered ? "bg-telemetry text-space-950" : "bg-space-700 text-slate-300"}`} title={series.filter_method}>
-            Smoothed (display only)
+            {shock ? "Landing shock" : "Smoothed (display only)"}
           </button>
         </div>
       </div>
@@ -97,15 +100,26 @@ export function ResultsChart({ series, peak, saturated, rangeG = 16 }: { series:
             {axes && <Line dataKey="ax" name="X" stroke="#f472b6" dot={false} strokeWidth={1.2} isAnimationActive={false} connectNulls={false} />}
             {axes && <Line dataKey="ay" name="Y" stroke="#a3e635" dot={false} strokeWidth={1.2} isAnimationActive={false} connectNulls={false} />}
             {axes && <Line dataKey="az" name="Z" stroke="#60a5fa" dot={false} strokeWidth={1.2} isAnimationActive={false} connectNulls={false} />}
-            <Line dataKey="mag" name="|a| raw" stroke="#22d3ee" dot={false} strokeWidth={2.4} isAnimationActive={false} connectNulls={false} />
-            {filtered && <Line dataKey="f" name="|a| smoothed" stroke="#e2e8f0" strokeDasharray="5 3" dot={false} strokeWidth={1.5} isAnimationActive={false} />}
+            {shock && filtered ? (
+              <>
+                <Line dataKey="mag" name="|a| raw (with vibration)" stroke="#475569" dot={false} strokeWidth={1} isAnimationActive={false} connectNulls={false} />
+                <Line dataKey="f" name="|a| landing shock (reported)" stroke="#22d3ee" dot={false} strokeWidth={2.6} isAnimationActive={false} />
+              </>
+            ) : (
+              <>
+                <Line dataKey="mag" name="|a| raw" stroke="#22d3ee" dot={false} strokeWidth={2.4} isAnimationActive={false} connectNulls={false} />
+                {filtered && <Line dataKey="f" name="|a| smoothed" stroke="#e2e8f0" strokeDasharray="5 3" dot={false} strokeWidth={1.5} isAnimationActive={false} />}
+              </>
+            )}
             <Legend verticalAlign="top" height={24} wrapperStyle={{ fontSize: 12, color: "#cbd5e1" }} />
           </ComposedChart>
         </ResponsiveContainer>
       </div>
       <div className="mt-1 text-[11px] text-slate-500">
         {series.decimated ? `Showing ${series.points} of ${series.n} samples (${series.decimation}). ` : `All ${series.n} samples shown. `}
-        Raw values are unfiltered; peaks are computed from raw data.{filtered ? ` Smoothing: ${series.filter_method}.` : ""}
+        {shock
+          ? `The reported peak is the landing shock: ${series.filter_method}. The grey line is the raw sensor signal, including vibration.`
+          : `Raw values are unfiltered; peaks are computed from raw data.${filtered ? ` Smoothing: ${series.filter_method}.` : ""}`}
       </div>
     </div>
   );

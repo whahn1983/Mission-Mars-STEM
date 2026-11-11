@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .signal import lowpass_for_display, magnitude, observed_rate_hz
+from .signal import j211_lowpass_axes, lowpass_for_display, magnitude, observed_rate_hz
 
 
 def _r(a: np.ndarray, nd: int = 4) -> list:
@@ -29,7 +29,20 @@ def build_series(samples: dict, analysis: dict | None, *, max_points: int = 1600
     t0 = int(peak_ns) if peak_ns else int(t[0])
 
     rate = observed_rate_hz(t)
-    filt, method = lowpass_for_display(mag, rate)
+    # When the reported peak is the filtered landing shock, plot exactly that
+    # signal (each axis filtered, then |a|); otherwise a display-only smoothing.
+    peak = (analysis or {}).get("peak") or {}
+    filter_is_peak = False
+    filt, method = None, ""
+    if peak.get("method") == "lowpass" and peak.get("filter_hz"):
+        fhz = float(peak["filter_hz"])
+        f = j211_lowpass_axes(ax, ay, az, rate, fhz)
+        if f is not None:
+            filt = magnitude(*f)
+            method = f"SAE J211 channel filter ({fhz:g} Hz, CFC {fhz * 0.6:g}) on each axis: the reported landing shock"
+            filter_is_peak = True
+    if filt is None:
+        filt, method = lowpass_for_display(mag, rate)
 
     if n > max_points:
         buckets = max(1, max_points // 2)
@@ -79,6 +92,7 @@ def build_series(samples: dict, analysis: dict | None, *, max_points: int = 1600
         "mag": _r(mag[sel]),
         "mag_filtered": _r(filt[sel]),
         "filter_method": method,
+        "filter_is_peak": filter_is_peak,
         "markers": markers,
         "range_g": ((analysis or {}).get("saturation") or {}).get("range_g"),
     }

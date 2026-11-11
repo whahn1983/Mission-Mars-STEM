@@ -10,7 +10,7 @@ import numpy as np
 
 from .events import Baseline, DetectorConfig, compute_baseline, detect_impacts
 from .physics import physics_summary
-from .signal import detect_saturation, magnitude, sampling_stats
+from .signal import detect_saturation, j211_lowpass_axes, magnitude, sampling_stats
 
 
 @dataclass
@@ -24,6 +24,12 @@ class QualityConfig:
     # False (default): an axis at the sensor limit is a warning and the
     # measured |a| peak is reported. True: such a test is invalid, with no peak.
     saturation_invalidates: bool = False
+    # The reported peak is the landing shock: |a| after a zero-phase low-pass
+    # of each axis with this -3 dB frequency, as in crash testing (SAE J211
+    # channel filter, CFC 60 = 100 Hz). Faster vibration and ringing of the
+    # lander/sensor is not part of it; the raw spike is kept in peak.raw_g.
+    # 0 = report the raw peak.
+    peak_filter_hz: float = 100.0
 
     @classmethod
     def from_dict(cls, d: dict | None) -> "QualityConfig":
@@ -62,6 +68,9 @@ class AnalysisResult:
     physics: dict
     window: dict
     config: dict = field(default_factory=dict)
+    # How the reported peak was measured: method, filter_hz, raw_g,
+    # filtered_g, pulse_width_ms, samples_in_pulse.
+    peak: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -77,6 +86,7 @@ class AnalysisResult:
             "physics": self.physics,
             "window": self.window,
             "config": self.config,
+            "peak": self.peak,
         }
 
 
@@ -187,6 +197,16 @@ def analyze_capture(
                     "The true peak may be higher. Try a lower drop height or more cushioning.",
                 )
             )
+        elif q.peak_filter_hz > 0:
+            flags.append(
+                Flag(
+                    "SATURATED",
+                    "warning",
+                    f"An axis reached the sensor's ±{range_g:g} g limit ({axes} samples). The landing shock is "
+                    "measured after filtering out vibration, which brief clipping of the spikes hardly changes; "
+                    "if many samples clip, it may read a little low.",
+                )
+            )
         else:
             flags.append(
                 Flag(
@@ -197,6 +217,59 @@ def analyze_capture(
                     "may be a little higher.",
                 )
             )
+
+    # --- Reported peak: the landing shock (vibration filtered out) ---------------
+    reported_peak = detection.peak_g
+    reported_gc = detection.gravity_comp_peak_g
+    peak_info: dict = {
+        "method": "raw",
+        "filter_hz": None,
+        "raw_g": detection.peak_g,
+        "filtered_g": None,
+        "pulse_width_ms": detection.pulse_width_ms,
+        "samples_in_pulse": detection.samples_in_pulse,
+    }
+    if detection.impact_detected and q.peak_filter_hz > 0:
+        filtered = j211_lowpass_axes(ax, ay, az, rate, q.peak_filter_hz)
+        if filtered is None:
+            peak_info["method"] = "raw (sample rate too low to filter)"
+        else:
+            fx, fy, fz = filtered
+            fmag = magnitude(fx, fy, fz)
+            p = detection.primary
+            assert p is not None
+            # The filtered pulse is wider than the raw spike: look a little
+            # beyond the raw event bounds.
+            margin = int(40e6)
+            win = np.nonzero((t >= p.start_ns - margin) & (t <= p.end_ns + margin) & np.isfinite(fmag))[0]
+            if win.size:
+                k = int(win[np.argmax(fmag[win])])
+                # Filtering removes vibration; it must never add height
+                # (filter overshoot on a clean pulse), so cap at the raw peak.
+                fpeak = min(float(fmag[k]), float(detection.peak_g))
+                base = detection.baseline.magnitude_g
+                half = base + (fpeak - base) / 2.0
+                hm = np.nan_to_num(fmag, nan=0.0) >= half
+                a0 = k
+                while a0 > 0 and hm[a0 - 1]:
+                    a0 -= 1
+                a1 = k
+                while a1 < hm.size - 1 and hm[a1 + 1]:
+                    a1 += 1
+                bx, by, bz = detection.baseline.mean_vector_g
+                comp = magnitude(fx[win] - bx, fy[win] - by, fz[win] - bz)
+                reported_peak = fpeak
+                reported_gc = float(np.nanmax(comp)) if np.isfinite(comp).any() else None
+                if reported_gc is not None and detection.gravity_comp_peak_g is not None:
+                    reported_gc = min(reported_gc, float(detection.gravity_comp_peak_g))
+                peak_info.update({
+                    "method": "lowpass",
+                    "filter_hz": q.peak_filter_hz,
+                    "filtered_g": fpeak,
+                    "peak_time_ns": int(t[k]),
+                    "pulse_width_ms": float((t[a1] - t[a0]) / 1e6),
+                    "samples_in_pulse": int(a1 - a0 + 1),
+                })
 
     # --- Impact-dependent checks -------------------------------------------------
     if not detection.impact_detected:
@@ -245,12 +318,13 @@ def analyze_capture(
             flags.append(
                 Flag("INVALID_SAMPLES_IN_IMPACT", "error", f"{bad_in_window} invalid samples during the impact.")
             )
-        if detection.samples_in_pulse is not None and detection.samples_in_pulse < det_cfg.undersampled_min_samples:
+        pulse_samples = peak_info.get("samples_in_pulse")
+        if pulse_samples is not None and pulse_samples < det_cfg.undersampled_min_samples:
             flags.append(
                 Flag(
                     "UNDERSAMPLED_PULSE",
                     "warning",
-                    f"The impact pulse spans only {detection.samples_in_pulse} samples; the measured peak may "
+                    f"The impact pulse spans only {pulse_samples} samples; the measured peak may "
                     "underestimate the true peak.",
                 )
             )
@@ -276,8 +350,8 @@ def analyze_capture(
                 )
 
     valid = not any(f.severity == "error" for f in flags)
-    measured_peak = detection.peak_g if (valid and detection.impact_detected) else None
-    gc_peak = detection.gravity_comp_peak_g if measured_peak is not None else None
+    measured_peak = reported_peak if (valid and detection.impact_detected) else None
+    gc_peak = reported_gc if measured_peak is not None else None
 
     physics = physics_summary(
         mass_kg=mass_kg,
@@ -308,4 +382,5 @@ def analyze_capture(
         physics=physics,
         window=window,
         config={"detector": det_cfg.to_dict(), "quality": q.to_dict(), "range_g": range_g},
+        peak=peak_info,
     )

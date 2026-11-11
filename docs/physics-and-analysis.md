@@ -14,13 +14,34 @@ An accelerometer measures **specific force** (proper acceleration), **f = a − 
 | Free fall after release | ≈ 0 g |
 | Landing impact | rises far above 1 g |
 
-The app's headline number is the **peak vector magnitude** of the raw specific force:
+The app's headline number is the **landing shock**: the peak vector magnitude of the specific force after the fast vibration is filtered out:
 
 ```
-|a| = sqrt(ax² + ay² + az²)        (units of g = 9.80665 m/s²)
+|a| = sqrt(ax_f² + ay_f² + az_f²)  (units of g = 9.80665 m/s²)
+ax_f, ay_f, az_f = each axis through an SAE J211 channel filter, CFC 60 (-3 dB at 100 Hz)
 ```
 
 It includes gravity's effect, so it is **not** the same as gravity-compensated translational acceleration. It is a consistent, well-defined metric for comparing landings, which is what the challenge needs.
+
+### Why the peak is filtered (the landing shock)
+
+A stiff lander on a hard floor does not stop with one smooth push. It **rings**: on the real EVB Lite, the readings swing back and forth between successive samples (0.57 ms apart) on all three axes. The single highest raw sample is set by that vibration, not by how hard the lander as a whole was stopped.
+
+Example: a real 14 cm (5.5 in) drop, `docs/evb-lite-evidence/EVBS_V1F9L_2026-11-10_18-51-44_83.csv`:
+* the raw spike is 18.3 g, lasting 0.6 ms (2 samples), with Z touching the −16 g limit
+* the landing shock is **11.6 g**, over a 17 ms pulse
+* the speed change of 1.9 m/s matches the 1.66 m/s impact plus a small bounce
+
+Crash testing has the same problem and solves it by filtering impact data before reading peaks. SAE J211-1 channel frequency classes are used, and CFC 60 is the class for whole-vehicle and structural accelerations. The app uses that filter:
+* a 2-pole Butterworth applied forward and backward (zero phase), designed at 2.0775 × CFC
+* applied to **each axis before |a|**, because filtering |a| itself would turn ringing into a false offset
+* capped at the raw peak, so filtering can only remove vibration and never adds height
+* a clean 20 ms landing is reduced by less than 0.1 %
+
+Details:
+* The setting is Operator → Analysis → *Landing-shock filter (Hz)*, stored as `quality.peak_filter_hz`, default 100. 0 reports the raw peak.
+* Every test stores the method, the raw spike (`analysis.peak.raw_g`), the filtered peak and the filtered pulse width. The report shows the raw spike as a second number, and the graph draws the landing shock over the faint raw signal.
+* Data too slow to filter (the 59 Hz live stream fallback) is reported raw. Its `analysis.peak.method` says so.
 
 ### Gravity-compensated estimate (grades 9–12 panel)
 
@@ -72,7 +93,7 @@ Operator buttons: **CAPTURE** (start the post-trigger window now, for fixed-wind
 3. **Hysteresis segmentation**: an event starts when d > max(1.5 g, 8 × noise σ) and ends when d < 0.5 g for 20 ms.
 4. **Primary impact**: the first event whose peak is ≥ 2.5 g **and** that follows a free-fall run (within 250 ms). If no event follows free fall, the first large event is used and `NO_FREEFALL_DETECTED` is added. With `require_freefall` on, such tests are rejected instead.
 5. **Secondary events**: later events above 1 g. An event is a **rebound** if an airborne phase (|a| < 0.5 g for ≥ 4 ms) precedes it, otherwise a **secondary** disturbance (oscillation, wobble).
-6. **Metrics**: peak |a| and its time; per-axis peaks; pulse width (full width at half maximum around the peak, plus the number of samples inside it); time to peak; gravity-compensated peak; Δv.
+6. **Metrics**: peak |a| and its time; per-axis peaks; pulse width (full width at half maximum around the peak, plus the number of samples inside it); time to peak; gravity-compensated peak; Δv. These are raw; the reported peak, its pulse width and the gravity-compensated peak are then taken from the filtered landing shock (§1).
 
 All thresholds are configurable (Operator → Analysis) and are recorded with every test.
 
@@ -157,7 +178,7 @@ So the **average** specific force during the stop is about **1 + h/d g**, and th
 
 Consequences:
 
-* A truly **rigid** lander dropped from 10 cm or more will very likely **exceed ±16 g**. The app will correctly report it as *over range*. That is a valid lesson ("the rigid lander was so harsh it maxed out the sensor"), but those tests are not ranked.
+* A truly **rigid** lander dropped from 10 cm or more will very likely touch **±16 g** on an axis in its raw spikes. By default that is a warning: the landing shock is still reported and ranked (§5).
 * Start at **10 cm**, check that the foam and rubber designs give valid results, then raise the height.
 * Keep the **landing surface** the same for every test (for example a firm mat or a tray of sand as "regolith"). A softer surface lowers every reading and makes results from different surfaces not comparable.
 * Protect the sensor: a sudden stop well beyond its rated range can damage hardware. Follow EVident's handling limits and secure the sensor inside the payload bay.

@@ -104,7 +104,7 @@ def test_csv_import(client):
     assert r.status_code == 200, r.text
     t = r.json()
     assert t["source"] == "csv_import" and t["data_origin"] == "physical"
-    assert t["measured_peak_g"] == pytest.approx(8.0)
+    assert t["measured_peak_g"] == pytest.approx(8.0, rel=1e-3)
     bad = client.post("/api/tests/import-csv", headers=PIN, files={"file": ("x.csv", b"a,b\n1,2\n", "text/csv")})
     assert bad.status_code == 400
 

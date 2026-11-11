@@ -19,15 +19,20 @@ def codes(result):
 # --- known peak ------------------------------------------------------------------
 def test_known_peak_fixture_is_measured_exactly(fixture_csv):
     p = fixture_csv("known_peak.csv")
+    raw = analyze_capture(p.t_ns, p.ax, p.ay, p.az, nominal_rate_hz=1600, quality=QualityConfig(peak_filter_hz=0))
+    assert raw.measured_peak_g == pytest.approx(8.0, abs=1e-6) and raw.peak["method"] == "raw"
     r = analyze_capture(p.t_ns, p.ax, p.ay, p.az, nominal_rate_hz=1600)
     assert r.valid
-    assert r.measured_peak_g == pytest.approx(8.0, abs=1e-6)
+    assert r.peak["method"] == "lowpass" and r.peak["raw_g"] == pytest.approx(8.0, abs=1e-6)
+    # The landing-shock filter leaves a clean 20 ms landing practically untouched.
+    assert r.measured_peak_g == pytest.approx(8.0, rel=1e-3) and r.measured_peak_g <= 8.0
     assert not r.saturated
     assert not [f for f in r.flags if f.severity == "error"]
     det = r.detection
     assert det["impact_detected"]
     # Gravity-compensated estimate subtracts the resting 1 g *vector*.
     assert det["gravity_comp_peak_g"] == pytest.approx(7.0, abs=1e-6)
+    assert r.gravity_comp_peak_g == pytest.approx(7.0, rel=1e-3)
     # 0.2 s of free fall → h = ½ g t² ≈ 0.196 m
     assert det["freefall"]["duration_ms"] == pytest.approx(199.375, abs=1)
     assert det["freefall"]["estimated_drop_height_m"] == pytest.approx(0.196, abs=0.01)
@@ -104,7 +109,7 @@ def test_clipped_fixture_reports_the_measured_peak_with_a_warning(fixture_csv):
     r = analyze_capture(p.t_ns, p.ax, p.ay, p.az, nominal_rate_hz=1600, range_g=16.0)
     assert r.saturated and r.valid, "over-range is a warning by default"
     sat = next(f for f in r.flags if f.code == "SATURATED")
-    assert sat.severity == "warning" and "a little higher" in sat.message
+    assert sat.severity == "warning" and "landing shock" in sat.message
     assert r.measured_peak_g == pytest.approx(16.0), "the measured value is reported"
     assert r.saturation["per_axis_counts"]["z"] > 0
 
@@ -203,3 +208,53 @@ def test_prediction_comparison():
     h = compare_prediction(kind="category", predicted_peak_g=None, low_g=8, high_g=None, measured_peak_g=12)
     assert h["inside_range"]
     assert compare_prediction(kind="number", predicted_peak_g=6, low_g=None, high_g=None, measured_peak_g=None) is None
+
+
+# --- landing shock: vibration filtered out (SAE J211 CFC 60 = 100 Hz) -------------
+def ringing_drop(rate=1754.0, shock_g=6.0, ring_g=14.0, ring_hz=800.0):
+    """A 20 ms 6 g landing with strong, fast ringing on all axes (a stiff lander on
+    a hard floor), sampled like the EVB Lite."""
+    n = int(2.0 * rate)
+    t = (np.arange(n) * (1e9 / rate)).astype(np.int64)
+    ax, ay, az = np.zeros(n), np.zeros(n), np.ones(n)
+    ff0, ff1 = int(0.8 * rate), int(0.97 * rate)
+    az[ff0:ff1] = 0.0
+    k = np.arange(int(0.02 * rate))
+    az[ff1:ff1 + k.size] = 1.0 + (shock_g - 1.0) * np.sin(np.pi * k / k.size)
+    tr = np.arange(int(0.03 * rate)) / rate
+    ring = ring_g * np.exp(-tr / 0.008) * np.sin(2 * np.pi * ring_hz * tr)
+    for arr, ph in ((ax, 0.0), (ay, 1.3), (az, 2.1)):
+        arr[ff1:ff1 + tr.size] += ring * np.cos(ph)
+    return t, ax, ay, az
+
+
+def test_landing_shock_filters_out_ringing():
+    t, ax, ay, az = ringing_drop()
+    r = analyze_capture(t, ax, ay, az, nominal_rate_hz=1754)
+    assert r.valid and r.peak["method"] == "lowpass" and r.peak["filter_hz"] == 100.0
+    assert r.peak["raw_g"] > 10.0, "the raw spike is dominated by the ringing"
+    assert r.measured_peak_g == pytest.approx(6.0, abs=0.6), "the reported peak is the 6 g landing"
+    assert r.peak["pulse_width_ms"] > 8 and "UNDERSAMPLED_PULSE" not in codes(r)
+    raw = analyze_capture(t, ax, ay, az, nominal_rate_hz=1754, quality=QualityConfig(peak_filter_hz=0))
+    assert raw.measured_peak_g == pytest.approx(r.peak["raw_g"])
+
+
+def test_too_slow_data_is_reported_unfiltered():
+    t, ax, ay, az = stationary(240, rate=59.0)
+    ax, ay, az = ax.copy(), ay.copy(), az.copy()
+    az[100:110] = 0.0
+    az[110] = 5.0
+    r = analyze_capture(t, ax, ay, az)
+    assert r.peak["method"].startswith("raw (sample rate too low")
+
+
+def test_real_evb_lite_drop_reports_a_realistic_landing_shock(fixture_csv):
+    """Real 14 cm (5.5 in) drop recorded by the sensor's own portal
+    (docs/evb-lite-evidence/EVBS_V1F9L_2026-11-10_18-51-44_83.csv): the raw
+    readings swing back and forth every sample (ringing) and Z touches -16 g."""
+    p = fixture_csv("evb_lite_drop_14cm.csv")
+    r = analyze_capture(p.t_ns, p.ax, p.ay, p.az, range_g=16.0)
+    assert r.valid and r.saturated
+    assert r.peak["raw_g"] == pytest.approx(18.29, abs=0.01)
+    assert 10.5 < r.measured_peak_g < 12.5, "the landing shock, not the vibration"
+    assert r.peak["pulse_width_ms"] == pytest.approx(17, abs=3)
