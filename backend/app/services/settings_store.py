@@ -19,6 +19,17 @@ SYSTEM_KEYS = SENSOR_KEYS + ("evb_accel_range_g", "sim_sample_rate_hz", "log_lev
 # STOP TEST") became record_window_s (10 s fixed window).
 OBSOLETE_KEYS = ("record_max_s",)
 
+# Earlier default values. A stored value still exactly equal to one of them
+# was never edited by the operator, so it is replaced by today's default on
+# load; edited values are kept.
+OLD_DEFAULTS: dict[str, list] = {
+    "criteria": [{
+        "success_max_peak_g": 8.0, "mass_budget_kg": 0.35, "require_payload_retained": True,
+        "require_stable_landing": True, "gentle_max_g": 4.0, "medium_max_g": 8.0,
+    }],
+    "prediction_ranges_g": [[[0, 2], [2, 4], [4, 6], [6, 8], [8, 12], [12, 16]]],
+}
+
 
 def env_defaults(env: Settings) -> dict:
     d = copy.deepcopy(DEFAULT_SETTINGS)
@@ -60,6 +71,12 @@ class SettingsStore:
                     if row is not None:
                         s.delete(row)
                     rows.pop(k)
+            for k, olds in OLD_DEFAULTS.items():
+                if k in rows and rows[k] in olds and rows[k] != self.defaults.get(k):
+                    row = s.get(SettingRow, k)
+                    if row is not None:
+                        row.value_json = copy.deepcopy(self.defaults[k])
+                        rows[k] = row.value_json
             for k, v in self.defaults.items():
                 if k not in rows:
                     s.add(SettingRow(key=k, value_json=v))
