@@ -65,7 +65,7 @@ Or press **F11**, or click the ⛶ button in the header.
 
 | Screen | What happens |
 |---|---|
-| **Mission Briefing** | Choose a grade band (1–4 / 5–8 / 9–12); three mission requirements |
+| **Mission Briefing** | Choose a grade band (1–4 / 5–8 / 9–12); the landing plan (hover, early engine cut-off, free fall onto the legs) with each drop height scaled to a real lander (1:20, e.g. 2 m for 10 cm); three mission requirements; an animated descent that shows each step |
 | **Lander Designer** | Rotate and zoom the 3D lander, X-ray view of the sensor payload, choose landing gear A–D (Rigid, Foam, Elastic, Hybrid), mass budget, impact speed and energy |
 | **Prediction** | Gentle/Medium/Hard (1–4), a g range (5–8), or a number on a keypad (9–12) |
 | **Live Test** | Sensor status, live magnitude and X/Y/Z strip chart, **ARM TEST**, **CAPTURE / STOP / CANCEL** |

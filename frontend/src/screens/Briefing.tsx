@@ -1,7 +1,12 @@
+import { useState } from "react";
 import { Button } from "../components/ui";
-import { BRIEFING, GRADE_BANDS } from "../lib/copy";
+import { BRIEFING, DESCENT_STEPS, fmtScaledHeight, GRADE_BANDS, MODEL_SCALE, numberWord } from "../lib/copy";
+import { fmtHeight } from "../lib/format";
 import { useStore } from "../state/store";
+import type { DescentPhase } from "../three/Lander";
 import { LanderScene } from "../three/LanderScene";
+
+const DEFAULT_HEIGHTS_M = [0.1, 0.2, 0.3];
 
 const REQ_ICONS = [
   // payload shield
@@ -16,12 +21,19 @@ export function Briefing() {
   const gradeBand = useStore((s) => s.gradeBand);
   const setGradeBand = useStore((s) => s.setGradeBand);
   const go = useStore((s) => s.go);
+  const heightOptions = useStore((s) => s.settings?.drop_height_options_m);
+  const legKinds = useStore((s) => s.configurations.filter((c) => c.enabled).length);
+  const [phase, setPhase] = useState<DescentPhase>("descent");
   const copy = BRIEFING[gradeBand];
   const young = gradeBand === "k4";
+  const heights = [...new Set(heightOptions?.length ? heightOptions : DEFAULT_HEIGHTS_M)].sort((a, b) => a - b);
+  const legsLine = legKinds
+    ? `${young ? "Try" : "Test"} ${numberWord(legKinds)} kinds of landing legs. Which one lands the softest?`
+    : "Which landing legs land the softest?";
 
   return (
     <div className="grid min-h-full grid-cols-1 gap-6 p-6 xl:h-full xl:grid-cols-[1.05fr_1fr]">
-      <div className="flex min-h-0 flex-col justify-center gap-6">
+      <div className="flex min-h-0 flex-col justify-center-safe gap-5">
         <div>
           <div className="mb-2 font-display text-sm tracking-[0.4em] text-mars">MISSION BRIEFING</div>
           <h1 className="font-display text-4xl font-black leading-tight text-white xl:text-6xl">
@@ -29,6 +41,21 @@ export function Briefing() {
           </h1>
           <p className={`mt-4 max-w-2xl text-slate-200 ${young ? "text-3xl font-semibold" : "text-2xl"}`}>{copy.lead}</p>
           <p className={`mt-2 max-w-2xl text-slate-400 ${young ? "text-xl" : "text-lg"}`}>{copy.body}</p>
+        </div>
+
+        <div className="panel p-4">
+          <div className="mb-1 text-xs font-bold uppercase tracking-[0.25em] text-mars">The landing plan</div>
+          <p className={`text-slate-200 ${young ? "text-lg" : "text-base"}`}>{copy.story}</p>
+          <p className="mt-3 text-sm text-slate-400">{copy.scale}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-3">
+            {heights.map((h) => (
+              <div key={h} className="flex items-baseline gap-2 rounded-xl border border-telemetry/30 bg-space-850/70 px-4 py-1.5" title={`1:${MODEL_SCALE} scale`}>
+                <span className="font-display text-xl font-black text-white">{fmtScaledHeight(h)}</span>
+                <span className="font-mono text-sm text-slate-400">({fmtHeight(h)})</span>
+              </div>
+            ))}
+            <p className={`font-semibold text-telemetry sm:ml-2 ${young ? "text-lg" : "text-sm"}`}>{legsLine}</p>
+          </div>
         </div>
 
         <div>
@@ -75,11 +102,27 @@ export function Briefing() {
       </div>
 
       <div className="panel relative min-h-[420px] overflow-hidden p-0">
-        <LanderScene mode="descent" interactive={false} autoRotate={false} cameraDistance={1.35} />
+        <LanderScene mode="descent" interactive={false} autoRotate={false} cameraDistance={1.45} onPhase={setPhase} />
         <div className="pointer-events-none absolute left-4 top-4 font-mono text-xs leading-5 text-telemetry/70">
           <div>TARGET: JEZERO-ANALOG TEST SITE</div>
           <div>PAYLOAD: 3-AXIS ACCELEROMETER</div>
         </div>
+        <ol className="pointer-events-none absolute inset-x-3 bottom-3 flex flex-wrap justify-center gap-1.5" aria-label="Landing sequence">
+          {DESCENT_STEPS.map((step, i) => {
+            const active = step.id === phase;
+            return (
+              <li
+                key={step.id}
+                aria-current={active ? "step" : undefined}
+                className={`rounded-full border px-2.5 py-1 font-display text-[10px] font-bold uppercase tracking-[0.12em] transition-colors duration-200 2xl:px-3 2xl:text-[11px] 2xl:tracking-[0.18em] ${
+                  active ? "border-mars bg-mars/25 text-white shadow-[0_0_20px_-6px_rgba(249,115,22,0.9)]" : "border-space-600 bg-space-900/70 text-slate-500"
+                }`}
+              >
+                {i + 1} · {young && "young" in step ? step.young : step.label}
+              </li>
+            );
+          })}
+        </ol>
       </div>
     </div>
   );

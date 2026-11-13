@@ -1,9 +1,9 @@
 import { ContactShadows, OrbitControls, Stars } from "@react-three/drei";
-import { Canvas } from "@react-three/fiber";
-import { Component, Suspense, useMemo, type ReactNode } from "react";
+import { Canvas, useThree } from "@react-three/fiber";
+import { Component, memo, Suspense, useLayoutEffect, useMemo, type ReactNode } from "react";
 import * as THREE from "three";
 import type { Geometry } from "../api/types";
-import { Lander, type LanderMode } from "./Lander";
+import { GROUND_Y, Lander, type DescentPhase, type LanderMode } from "./Lander";
 
 function MarsGround() {
   const rocks = useMemo(() => {
@@ -44,7 +44,7 @@ function MarsGround() {
   }, []);
   return (
     <group>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.12, 0]} receiveShadow>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, GROUND_Y, 0]} receiveShadow>
         <circleGeometry args={[12, 64]} />
         <meshStandardMaterial map={tex} roughness={1} metalness={0} />
       </mesh>
@@ -56,6 +56,18 @@ function MarsGround() {
       ))}
     </group>
   );
+}
+
+/**
+ * OrbitControls only aims the camera at its target while it is enabled, so a
+ * non-interactive view aims the camera itself.
+ */
+function AimCamera({ y }: { y: number }) {
+  const camera = useThree((s) => s.camera);
+  useLayoutEffect(() => {
+    camera.lookAt(0, y, 0);
+  }, [camera, y]);
+  return null;
 }
 
 class GLBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { failed: boolean }> {
@@ -79,7 +91,9 @@ function Fallback() {
   );
 }
 
-export function LanderScene({
+// Memoised so a parent re-render (e.g. the briefing's phase readout) does not
+// re-render the WebGL scene.
+export const LanderScene = memo(function LanderScene({
   geometry,
   accent,
   xray = false,
@@ -87,6 +101,7 @@ export function LanderScene({
   interactive = true,
   autoRotate = true,
   cameraDistance = 1,
+  onPhase,
 }: {
   geometry?: Geometry;
   accent?: string;
@@ -95,8 +110,10 @@ export function LanderScene({
   interactive?: boolean;
   autoRotate?: boolean;
   cameraDistance?: number;
+  onPhase?: (phase: DescentPhase) => void;
 }) {
   const d = cameraDistance;
+  const targetY = mode === "descent" ? 1.75 : 0.9;
   return (
     <GLBoundary fallback={<Fallback />}>
       <Canvas
@@ -114,10 +131,11 @@ export function LanderScene({
         <pointLight position={[3, 1, -4]} intensity={10} color="#f97316" distance={10} />
         <Stars radius={60} depth={40} count={2500} factor={3} saturation={0} fade speed={0.6} />
         <Suspense fallback={null}>
-          <Lander geometry={geometry} accent={accent} xray={xray} mode={mode} />
+          <Lander geometry={geometry} accent={accent} xray={xray} mode={mode} onPhase={onPhase} />
           <MarsGround />
           <ContactShadows position={[0, -0.11, 0]} opacity={0.6} scale={6} blur={2.4} far={3} />
         </Suspense>
+        {!interactive && <AimCamera y={targetY} />}
         <OrbitControls
           enabled={interactive}
           enablePan={false}
@@ -125,11 +143,11 @@ export function LanderScene({
           maxDistance={9}
           minPolarAngle={0.25}
           maxPolarAngle={Math.PI / 2.05}
-          target={[0, mode === "descent" ? 1.2 : 0.9, 0]}
+          target={[0, targetY, 0]}
           autoRotate={autoRotate}
           autoRotateSpeed={0.7}
         />
       </Canvas>
     </GLBoundary>
   );
-}
+});
