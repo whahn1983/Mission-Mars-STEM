@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { Comparison as Cmp, DataOrigin, SessionInfo } from "../api/types";
 import { Badge, Button, Panel, Segmented } from "../components/ui";
 import { fmtG, fmtHeight, fmtTime } from "../lib/format";
+import { effectiveHeight } from "../lib/height";
 import { useStore } from "../state/store";
 
 type GroupBy = "configuration" | "height" | "session" | "date";
@@ -14,8 +15,10 @@ export function Comparison() {
   const sensor = useStore((s) => s.sensor);
   const go = useStore((s) => s.go);
   const newMission = useStore((s) => s.newMission);
+  const dropHeight = useStore((s) => s.dropHeight);
   const [origin, setOrigin] = useState<DataOrigin>(sensor?.data_origin === "physical" ? "physical" : "simulated");
-  const [height, setHeight] = useState<number | null>(settings?.drop_height_m ?? null);
+  // Start at the height this student tested (fair comparison).
+  const [height, setHeight] = useState<number | null>(settings ? effectiveHeight(settings, dropHeight) : null);
   const [groupBy, setGroupBy] = useState<GroupBy>("configuration");
   const [sessionId, setSessionId] = useState<number | null>(null);
   const [sessions, setSessions] = useState<SessionInfo[]>([]);

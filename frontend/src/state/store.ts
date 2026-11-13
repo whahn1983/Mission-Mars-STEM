@@ -27,7 +27,7 @@ interface Mission {
   gradeBand: GradeBand;
   configurationId: number | null;
   prediction: PredictionPayload | null;
-  dropHeight: number | null; // student-chosen height (simulation only)
+  dropHeight: number | null; // chosen on the Design screen (null = station default)
   resultTestId: number | null;
 }
 

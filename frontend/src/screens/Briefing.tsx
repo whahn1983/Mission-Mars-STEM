@@ -2,11 +2,10 @@ import { useState } from "react";
 import { Button } from "../components/ui";
 import { BRIEFING, DESCENT_STEPS, fmtScaledHeight, GRADE_BANDS, MODEL_SCALE, numberWord } from "../lib/copy";
 import { fmtHeight } from "../lib/format";
+import { heightOptions } from "../lib/height";
 import { useStore } from "../state/store";
 import type { DescentPhase } from "../three/Lander";
 import { LanderScene } from "../three/LanderScene";
-
-const DEFAULT_HEIGHTS_M = [0.1, 0.2, 0.3];
 
 const REQ_ICONS = [
   // payload shield
@@ -21,12 +20,12 @@ export function Briefing() {
   const gradeBand = useStore((s) => s.gradeBand);
   const setGradeBand = useStore((s) => s.setGradeBand);
   const go = useStore((s) => s.go);
-  const heightOptions = useStore((s) => s.settings?.drop_height_options_m);
+  const settings = useStore((s) => s.settings);
   const legKinds = useStore((s) => s.configurations.filter((c) => c.enabled).length);
   const [phase, setPhase] = useState<DescentPhase>("descent");
   const copy = BRIEFING[gradeBand];
   const young = gradeBand === "k4";
-  const heights = [...new Set(heightOptions?.length ? heightOptions : DEFAULT_HEIGHTS_M)].sort((a, b) => a - b);
+  const heights = heightOptions(settings);
   const legsLine = legKinds
     ? `${young ? "Try" : "Test"} ${numberWord(legKinds)} kinds of landing legs. Which one lands the softest?`
     : "Which landing legs land the softest?";

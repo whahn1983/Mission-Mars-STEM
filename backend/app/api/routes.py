@@ -32,7 +32,7 @@ router = APIRouter(prefix="/api")
 operator = [Depends(require_operator)]
 
 PUBLIC_SETTING_KEYS = (
-    "drop_height_m", "drop_height_options_m", "allow_student_height_change", "idle_reset_seconds",
+    "drop_height_m", "drop_height_options_m", "idle_reset_seconds",
     "criteria", "prediction_ranges_g", "sim_gravity", "pre_trigger_s", "post_trigger_s",
 )
 
@@ -259,6 +259,20 @@ async def capture_cancel(rt: Runtime = Depends(get_runtime)) -> dict:
 @router.post("/operator/reset", dependencies=operator)
 async def operator_reset(rt: Runtime = Depends(get_runtime)) -> dict:
     snap = await _cap(rt).reset()
+    rt.hub.publish({"type": "reset", "at": time.time()})
+    return snap
+
+
+@router.post("/mission/reset")
+async def mission_reset(rt: Runtime = Depends(get_runtime)) -> dict:
+    """Student "New mission" button: every screen back to the Mission Briefing.
+
+    Unlike the operator reset it never interrupts a test in progress.
+    """
+    cap = _cap(rt)
+    if cap.state in (CaptureState.BASELINE, CaptureState.ARMED, CaptureState.TRIGGERED, CaptureState.ANALYZING):
+        raise HTTPException(409, "A test is in progress. Finish or cancel it on the Test screen first.")
+    snap = await cap.reset()
     rt.hub.publish({"type": "reset", "at": time.time()})
     return snap
 

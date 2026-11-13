@@ -66,18 +66,20 @@ Or press **F11**, or click the ⛶ button in the header.
 | Screen | What happens |
 |---|---|
 | **Mission Briefing** | Choose a grade band (1–4 / 5–8 / 9–12); the landing plan (hover, early engine cut-off, free fall onto the legs) with each drop height scaled to a real lander (1:20, e.g. 2 m for 10 cm); three mission requirements; an animated descent that shows each step |
-| **Lander Designer** | Rotate and zoom the 3D lander, X-ray view of the sensor payload, choose landing gear A–D (Rigid, Foam, Elastic, Hybrid), mass budget, impact speed and energy |
+| **Lander Designer** | Rotate and zoom the 3D lander, X-ray view of the sensor payload, choose landing gear A–D (Rigid, Foam, Elastic, Hybrid) **and the drop height** (from the operator's list, e.g. 10 / 20 / 30 cm), mass budget, impact speed and energy |
 | **Prediction** | Gentle/Medium/Hard (1–4), a g range (5–8), or a number on a keypad (9–12) |
 | **Live Test** | Sensor status, live magnitude and X/Y/Z strip chart, **ARM TEST**, **CAPTURE / STOP / CANCEL** |
-| **Landing Results** | Peak impact acceleration, acceleration-vs-time graph, prediction vs measured, validity and saturation, physics (5–12) |
+| **Landing Results** | Peak impact acceleration, test conditions (landing gear, drop height, mass), acceleration-vs-time graph, prediction vs measured, validity and saturation, physics (5–12) |
 | **Mission Comparison** | Valid results grouped by gear, drop height, session or date; measured and simulated are never mixed |
 
-**Keyboard and touch:** Enter = next · Esc = back · 1–4 = choose · Space = arm/release · X = X-ray (designer) · Ctrl+Shift+H = new mission · Ctrl+Shift+O = operator dashboard. On touchscreens, press and hold the logo for 2 s to open the operator dashboard.
+**New mission:** the ⟲ **New mission** button in the top-right corner returns every screen to the Mission Briefing (after a confirmation; not while a test is running).
+
+**Keyboard and touch:** Enter = next · Esc = back · 1–4 = choose · Space = arm/release · X = X-ray (designer) · Ctrl+Shift+H = new mission (this screen) · Ctrl+Shift+O = operator dashboard. On touchscreens, press and hold the logo for 2 s to open the operator dashboard.
 
 ### Operator dashboard (Ctrl+Shift+O, PIN = `OPERATOR_PIN`, default `1113`)
 
 * **System:** the `.env` settings, editable in the app: sensor mode, sensor IP, port, timeout and range, operator PIN, simulator sample rate, log level, and *Restore defaults from .env*
-* **Station:** one-click **Reset student mission (all screens)**, clear the current test, start/stop capture, drop height, simulation gravity and seed, idle auto-reset
+* **Station:** one-click **Reset student mission (all screens)** (also cancels a test in progress), clear the current test, start/stop capture, the drop heights students can choose, simulation gravity and seed, idle auto-reset
 * **Sensor:** mode (Simulation / EVB Lite / CSV replay), sensor IP, connect/disconnect, diagnostics, observed sample rate, battery (if reported), last contact, errors, read-only discovery probe, replay upload
 * **Landing gear:** enable only the versions you built, enter measured masses, colours, photos, advanced 3D/simulation parameters
 * **Data & export:** sessions, test history (view, exclude), CSV/ZIP export, CSV import

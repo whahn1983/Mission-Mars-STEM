@@ -225,13 +225,9 @@ class CaptureService:
             raise CaptureError(self.manager.stream_error or "Live capture is not available in the current sensor mode.")
 
         simulated = self.manager.mode == "simulation"
-        height = float(settings["drop_height_m"])
-        if drop_height_m is not None:
-            if not simulated and abs(float(drop_height_m) - height) > 1e-6:
-                raise CaptureError("Drop height for physical tests is set by the operator.")
-            if simulated and not settings.get("allow_student_height_change", True):
-                raise CaptureError("Changing the drop height is disabled by the operator.")
-            height = float(drop_height_m)
+        # The student chooses the drop height on the Design screen (physical
+        # and simulated tests alike); the station default applies otherwise.
+        height = float(drop_height_m if drop_height_m is not None else settings["drop_height_m"])
         if not (0.0 < height <= 3.0):
             raise CaptureError("Drop height must be between 0 and 3 m.")
 

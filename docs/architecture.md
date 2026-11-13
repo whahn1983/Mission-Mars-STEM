@@ -64,6 +64,7 @@ Public (student screens):
 | GET | `/api/state` | sensor + capture snapshot, public settings |
 | GET | `/api/configurations` | presets |
 | GET/POST | `/api/capture`, `/api/capture/{arm,simulate-drop,trigger,stop,cancel}` | test control |
+| POST | `/api/mission/reset` | student *New mission*: reset all screens (refused while a test is running) |
 | GET | `/api/tests`, `/api/tests/{id}`, `/api/tests/{id}/series`, `/api/tests/{id}/samples.csv` | results |
 | GET | `/api/comparison?data_origin=&drop_height_m=&group_by=&session_id=` | comparison |
 | GET | `/api/sessions`, `/api/sensor` | |

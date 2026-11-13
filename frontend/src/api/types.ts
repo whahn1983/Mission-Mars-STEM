@@ -132,7 +132,6 @@ export interface Criteria {
 export interface PublicSettings {
   drop_height_m: number;
   drop_height_options_m: number[];
-  allow_student_height_change: boolean;
   idle_reset_seconds: number;
   criteria: Criteria;
   prediction_ranges_g: [number, number][];

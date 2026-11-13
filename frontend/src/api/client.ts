@@ -108,6 +108,8 @@ export const api = {
   stop: () => post<CaptureSnapshot>("/api/capture/stop"),
   cancel: () => post<CaptureSnapshot>("/api/capture/cancel"),
   operatorReset: () => post<CaptureSnapshot>("/api/operator/reset"),
+  /** Student "New mission": every screen back to the briefing (refused during a test). */
+  missionReset: () => post<CaptureSnapshot>("/api/mission/reset"),
   verifyPin: () => post<{ ok: boolean }>("/api/operator/verify"),
 
   tests: (p: { session_id?: number | null; data_origin?: string | null; limit?: number } = {}) =>
