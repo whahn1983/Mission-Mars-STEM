@@ -3,6 +3,7 @@ import { api, ApiError, setOperatorPin } from "../api/client";
 import type { Configuration, DiagnosticsReport, LogEntry, ProbeResult, SensorMode, SessionInfo, SystemSettings, SystemView, TestSummary } from "../api/types";
 import { Badge, Button, Field, inputCls, Modal, Panel, Segmented, Stat, Toggle } from "../components/ui";
 import { ago, fmtDateTime, fmtG, fmtHeight, fmtNum, SOURCE_LABEL } from "../lib/format";
+import { effectiveHeight } from "../lib/height";
 import { useStore } from "../state/store";
 
 type Tab = "station" | "system" | "sensor" | "gear" | "data" | "analysis" | "logs";
@@ -65,8 +66,10 @@ function StationTab({ settings, reload }: { settings: Record<string, unknown>; r
   const configurationId = useStore((s) => s.configurationId);
   const gradeBand = useStore((s) => s.gradeBand);
   const prediction = useStore((s) => s.prediction);
-  const mission = { configurationId, gradeBand, prediction };
-  const [heightCm, setHeightCm] = useState(String(Math.round(Number(settings.drop_height_m) * 100)));
+  const dropHeight = useStore((s) => s.dropHeight);
+  const publicSettings = useStore((s) => s.settings);
+  const notify = useStore((s) => s.notify);
+  const mission = { configurationId, gradeBand, prediction, dropHeightM: effectiveHeight(publicSettings, dropHeight) };
   const [options, setOptions] = useState(((settings.drop_height_options_m as number[]) ?? []).map((h) => Math.round(h * 100)).join(", "));
   const save = (changes: Record<string, unknown>, msg = "Saved") => run(() => api.updateSettings(changes), msg).then(reload);
 
@@ -91,10 +94,16 @@ function StationTab({ settings, reload }: { settings: Record<string, unknown>; r
             <Button
               variant="ghost"
               disabled={busy || !mission.configurationId}
-              title="Arm using the landing gear and prediction currently chosen on the student screen"
+              title="Arm using the landing gear, drop height and prediction currently chosen on the student screen"
               onClick={() =>
                 run(
-                  () => api.arm({ configuration_id: mission.configurationId!, grade_band: mission.gradeBand, prediction: mission.prediction }),
+                  () =>
+                    api.arm({
+                      configuration_id: mission.configurationId!,
+                      grade_band: mission.gradeBand,
+                      prediction: mission.prediction,
+                      drop_height_m: mission.dropHeightM,
+                    }),
                   "Armed",
                 )
               }
@@ -114,42 +123,36 @@ function StationTab({ settings, reload }: { settings: Record<string, unknown>; r
         </div>
       </Panel>
 
-      <Panel title="Drop height">
+      <Panel title="Drop heights">
         <div className="flex flex-col gap-3">
+          <p className="text-sm text-slate-300">
+            Students choose the drop height on the <b>Design</b> screen, next to the landing gear. It is saved with each test and shown in the report.
+          </p>
           <div className="flex items-end gap-2">
-            <Field label="Current drop height (cm)">
-              <input className={inputCls} value={heightCm} onChange={(e) => setHeightCm(e.target.value)} inputMode="decimal" />
-            </Field>
-            <Button disabled={busy} onClick={() => save({ drop_height_m: Number(heightCm) / 100 }, "Drop height saved")}>
-              Set
-            </Button>
-          </div>
-          <div className="flex items-end gap-2">
-            <Field label="Height options shown to students in simulation (cm)" hint="Comma-separated, e.g. 10, 20, 30">
+            <Field label="Heights students can choose (cm)" hint="Comma-separated, e.g. 10, 20, 30. Offer only heights the drop stand can do.">
               <input className={inputCls} value={options} onChange={(e) => setOptions(e.target.value)} />
             </Field>
             <Button
               variant="ghost"
               disabled={busy}
-              onClick={() =>
-                save({
-                  drop_height_options_m: options
-                    .split(",")
-                    .map((x) => Number(x.trim()) / 100)
-                    .filter((x) => x > 0 && x <= 3),
-                })
-              }
+              onClick={() => {
+                const list = [...new Set(options.split(",").map((x) => Math.round(Number(x.trim())) / 100))]
+                  .filter((x) => x > 0 && x <= 3)
+                  .sort((a, b) => a - b);
+                if (!list.length) return notify("error", "Enter at least one height between 1 and 300 cm.");
+                // Preselect the lowest height for new missions unless the current default is still offered.
+                const def = Number(settings.drop_height_m);
+                const changes: Record<string, unknown> = { drop_height_options_m: list };
+                if (!list.some((h) => Math.abs(h - def) < 1e-6)) changes.drop_height_m = list[0];
+                setOptions(list.map((h) => Math.round(h * 100)).join(", "));
+                return save(changes, "Drop heights saved");
+              }}
             >
               Save
             </Button>
           </div>
-          <Toggle
-            checked={!!settings.allow_student_height_change}
-            onChange={(v) => save({ allow_student_height_change: v })}
-            label="Students may change the drop height (simulation only)"
-          />
           <p className="text-xs text-slate-500">
-            Physical tests always use the height set here.
+            New missions start at {fmtHeight(effectiveHeight(publicSettings, null))}. Over-range readings? Remove the highest heights.
           </p>
         </div>
       </Panel>

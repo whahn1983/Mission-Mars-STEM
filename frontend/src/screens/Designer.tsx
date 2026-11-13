@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import type { Configuration } from "../api/types";
 import { Badge, Button, Panel, TraitBar } from "../components/ui";
-import { TRAIT_LABELS } from "../lib/copy";
+import { fmtScaledHeight, TRAIT_LABELS } from "../lib/copy";
 import { fmtHeight, fmtMass } from "../lib/format";
+import { effectiveHeight, heightOptions, isSameHeight } from "../lib/height";
 import { useStore } from "../state/store";
 import { LanderScene } from "../three/LanderScene";
 
@@ -65,8 +66,9 @@ export function Designer() {
   }, [enabled, select]);
 
   const sim = sensor?.mode === "simulation";
-  const canChangeHeight = sim && settings?.allow_student_height_change;
-  const height = (canChangeHeight && dropHeight) || settings?.drop_height_m || 0.2;
+  const heights = heightOptions(settings);
+  const height = effectiveHeight(settings, dropHeight);
+  const young = gradeBand === "k4";
   const budget = settings?.criteria.mass_budget_kg ?? 0.35;
   const mass = selected?.mass_kg ?? 0;
   const massPct = Math.min(130, (mass / budget) * 100);
@@ -121,7 +123,7 @@ export function Designer() {
 
         {selected && (
           <Panel title="2 · Engineering trade-offs">
-            <p className={`mb-3 text-slate-300 ${gradeBand === "k4" ? "text-lg" : ""}`}>{selected.description}</p>
+            <p className={`mb-3 text-slate-300 ${young ? "text-lg" : ""}`}>{selected.description}</p>
             <div className="grid grid-cols-2 gap-x-6 gap-y-2">
               {Object.entries(traits).map(([k, v]) => (
                 <div key={k} className="flex items-center justify-between gap-3">
@@ -145,25 +147,36 @@ export function Designer() {
           </Panel>
         )}
 
-        <Panel title="3 · Landing conditions" right={sim ? <Badge tone="sim">simulation</Badge> : <Badge tone="go">physical test</Badge>}>
-          {canChangeHeight ? (
-            <div className="mb-3 flex flex-wrap gap-2">
-              {(settings?.drop_height_options_m ?? [0.1, 0.2, 0.3]).map((h) => (
-                <Button key={h} size="sm" variant={Math.abs(h - height) < 1e-6 ? "primary" : "ghost"} onClick={() => setDropHeight(h)}>
-                  {fmtHeight(h)}
-                </Button>
-              ))}
-            </div>
-          ) : (
-            <div className="mb-3 text-sm text-slate-400">Drop height is set by the operator for the physical test stand.</div>
-          )}
-          <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-xl bg-space-850/70 p-2 text-center">
-              <div className="text-[11px] uppercase tracking-widest text-slate-400">Drop height</div>
-              <div className="font-mono text-2xl font-bold text-white">{fmtHeight(height)}</div>
-            </div>
-            {gradeBand !== "k4" && (
-              <>
+        <Panel title="3 · Choose the drop height" right={sim ? <Badge tone="sim">simulation</Badge> : <Badge tone="go">physical test</Badge>}>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(6.5rem,1fr))] gap-2" role="radiogroup" aria-label="Drop height">
+            {heights.map((h) => {
+              const on = isSameHeight(h, height);
+              return (
+                <button
+                  key={h}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => setDropHeight(h)}
+                  className={`rounded-2xl border-2 px-2 py-2 text-center transition ${
+                    on ? "border-telemetry bg-telemetry/10 shadow-[0_0_30px_-10px_rgba(34,211,238,0.9)]" : "border-space-600 bg-space-800/60 hover:border-telemetry/40"
+                  }`}
+                >
+                  <div className="font-mono text-2xl font-bold text-white">{fmtHeight(h)}</div>
+                  <div className="text-xs text-slate-400" title="Same drop on a full-size lander (1:20 scale)">
+                    {fmtScaledHeight(h)} {young ? "for a real lander" : "real lander"}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <p className={`mt-2 text-slate-400 ${young ? "text-base" : "text-sm"}`}>
+            {young ? "A higher drop makes a harder landing." : "Higher drops land faster and harder."}
+            {!sim && " The lander is released from this height on the drop stand."}
+          </p>
+          {!young && (
+            <>
+              <div className="mt-3 grid grid-cols-2 gap-2">
                 <div className="rounded-xl bg-space-850/70 p-2 text-center">
                   <div className="text-[11px] uppercase tracking-widest text-slate-400">Impact speed</div>
                   <div className="font-mono text-2xl font-bold text-white">{speed.toFixed(2)}</div>
@@ -174,10 +187,10 @@ export function Designer() {
                   <div className="font-mono text-2xl font-bold text-white">{energy.toFixed(2)}</div>
                   <div className="text-[11px] text-slate-500">J · E = mgh</div>
                 </div>
-              </>
-            )}
-          </div>
-          {gradeBand !== "k4" && <div className="mt-2 text-xs text-slate-500">Simplified Earth-gravity classroom calculation (no air drag). The test happens on Earth.</div>}
+              </div>
+              <div className="mt-2 text-xs text-slate-500">Simplified Earth-gravity classroom calculation (no air drag). The test happens on Earth.</div>
+            </>
+          )}
         </Panel>
 
         <Button variant="mars" size="lg" disabled={!selected} onClick={() => go("predict")} className="font-display tracking-[0.2em]">

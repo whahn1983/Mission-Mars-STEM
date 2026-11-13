@@ -143,9 +143,10 @@ DEFAULT_CONFIGURATIONS: list[dict] = [
 
 DEFAULT_SETTINGS: dict = {
     # Station
+    # Heights the student chooses from on the Design screen; drop_height_m is
+    # the one preselected for a new mission.
     "drop_height_m": 0.20,
     "drop_height_options_m": [0.10, 0.20, 0.30],
-    "allow_student_height_change": True,  # only in simulation mode
     "idle_reset_seconds": 120,
     # Capture
     "pre_trigger_s": 0.5,

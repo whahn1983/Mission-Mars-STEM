@@ -19,7 +19,7 @@ Open the **operator dashboard** with **Ctrl+Shift+O**, the faint ⚙ in the top-
    * **Accel Range ±16 g**, **Accelerometer** on, and **Gravity Compensation off**. The analysis needs the 1 g resting reading; the app refuses to arm while gravity compensation is on. Operator → Sensor shows what the sensor reports.
    * Sampling frequency **≈ 1.6 kHz** (the sensor delivered 1,754 Hz). Higher rates make each download much slower: the sensor sends about 110 KB/s, so 10 s at 1.7 kHz takes about 5 s to arrive after STOP, and 10 s at 6.6 kHz about 20 s.
    * Then Operator → Sensor → mode **EVB Lite**, **Reload EVB profile**. The profile badge should say *record mode ready*.
-6. **Drop height (Operator → Station):** choose a height where the cushioned designs give valid results below ±16 g. **Start at 10 cm** (see the drop-height table in `docs/physics-and-analysis.md`).
+6. **Drop heights (Operator → Station):** list the heights students may choose on the Design screen, only ones the drop stand can do and where the cushioned designs give valid results below ±16 g. **Include 10 cm** (see the drop-height table in `docs/physics-and-analysis.md`). New missions start at the default height (20 cm) if it is listed, otherwise at the lowest one.
 7. **Start a session (Operator → Data & export → Sessions → New)**, e.g. "STEM Night 2026-11-13". Tests always attach to the active session. One is created automatically if none exists.
 
 ## Station setup on the night
@@ -34,19 +34,19 @@ Open the **operator dashboard** with **Ctrl+Shift+O**, the faint ⚙ in the top-
 | Step | Student does | Operator does |
 |---|---|---|
 | Briefing | Picks a grade band, presses **START MISSION** | — |
-| Design | Chooses landing gear A–D, rotates the 3D model, toggles X-ray to see the payload | Fits the matching physical landing gear to the lander |
+| Design | Chooses landing gear A–D and the drop height, rotates the 3D model, toggles X-ray to see the payload | Fits the matching physical landing gear to the lander and sets the release point to the chosen height (also shown on the Test screen) |
 | Predict | Gentle / Medium / Hard (1–4), a g range (5–8) or a number (9–12) | — |
 | Test | Presses **ARM TEST** (or Space), watches the live graph | Holds the lander still on the release point. When the screen says **RELEASE THE LANDER!**, the child releases it before the countdown ends (about 9 s). The screen then shows **LANDING DETECTED ✓**. When the countdown ends, the report appears a few seconds later, once the recording has downloaded. In simulation the student presses **RELEASE (SIMULATED DROP)** |
-| Results | Sees the peak g, graph and outcome | Optional: mark *Landed upright?* / *Payload stayed in place?* (the yellow OPERATOR strip appears while you are unlocked) |
+| Results | Sees the peak g, the test conditions (gear, drop height, mass), graph and outcome | Optional: mark *Landed upright?* / *Payload stayed in place?* (the yellow OPERATOR strip appears while you are unlocked) |
 | Improve | Compares designs, tries another | Swaps the gear |
 
-The screen returns to the briefing automatically after 2 minutes of inactivity (configurable). **New mission** or **Ctrl+Shift+H** does it right away.
+The screen returns to the briefing automatically after 2 minutes of inactivity (configurable). The ⟲ **New mission** button in the top-right corner returns every screen to the briefing right away (it asks first, and is greyed out while a test is running); **Ctrl+Shift+H** resets just this screen.
 
 ## One-click recovery
 
 | Problem | Fix |
 |---|---|
-| Student screen in a weird state | Operator → Station → **Reset student mission (all screens)** |
+| Student screen in a weird state | ⟲ **New mission** (top right), or Operator → Station → **Reset student mission (all screens)**, which also cancels a test in progress |
 | A bad drop (hit the stand, pushed, fell over) | Results → OPERATOR strip → **Exclude from rankings**, or Data & export → test history → Exclude |
 | Stuck in *Armed* | Test screen **Cancel**, or Operator → Station → **Clear current test** |
 | "Sensor unavailable" | Operator → Sensor → **Switch to simulation now**. Results are then clearly labeled *simulated*. Fix the sensor during a quiet moment and switch back |

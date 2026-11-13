@@ -1,6 +1,76 @@
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
+import { api, ApiError } from "../api/client";
 import { SCREENS, useStore, type Screen } from "../state/store";
 import { ago } from "../lib/format";
+import { Button, Modal } from "./ui";
+
+const TEST_RUNNING = ["baseline", "armed", "triggered", "analyzing"];
+
+/** Top-right "New mission": every screen back to the Mission Briefing. */
+function NewMissionButton() {
+  const capture = useStore((s) => s.capture);
+  const newMission = useStore((s) => s.newMission);
+  const notify = useStore((s) => s.notify);
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const running = !!capture && TEST_RUNNING.includes(capture.state);
+
+  const reset = async () => {
+    setBusy(true);
+    try {
+      await api.missionReset();
+      // The station tells every screen to reset; without a live link, reset this one now.
+      if (!useStore.getState().wsConnected) newMission();
+      setConfirm(false);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        notify("error", e.message);
+      } else {
+        // Station unreachable: still bring this screen back to the briefing.
+        newMission();
+      }
+      setConfirm(false);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setConfirm(true)}
+        disabled={running}
+        className="inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-telemetry/30 bg-space-800/70 px-3 py-1 text-xs font-bold uppercase tracking-wider text-slate-200 transition hover:border-telemetry/60 hover:bg-space-700 disabled:cursor-not-allowed disabled:opacity-40"
+        title={running ? "Finish or cancel the test first" : "Reset all screens to the Mission Briefing"}
+        aria-label="New mission: reset all screens to the Mission Briefing"
+      >
+        <span aria-hidden className="text-base leading-none">⟲</span>
+        <span className="hidden sm:inline">New mission</span>
+      </button>
+      <Modal open={confirm} onClose={() => !busy && setConfirm(false)} title="START A NEW MISSION?">
+        {/* Keep Enter/Esc here from also moving between screens. */}
+        <div
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === "Escape" && !busy) setConfirm(false);
+          }}
+        >
+          <p className="text-slate-200">All screens go back to the Mission Briefing. The landing gear, drop height and prediction are cleared.</p>
+          <p className="mt-2 text-sm text-slate-400">Saved test results are kept.</p>
+          <div className="mt-5 flex gap-3">
+            <Button variant="mars" className="flex-1" disabled={busy} onClick={reset} autoFocus>
+              ⟲ Start over
+            </Button>
+            <Button variant="ghost" disabled={busy} onClick={() => setConfirm(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </>
+  );
+}
 
 export function SensorChip({ compact = false }: { compact?: boolean }) {
   const sensor = useStore((s) => s.sensor);
@@ -124,6 +194,7 @@ export function Shell({ children }: { children: ReactNode }) {
         <Steps />
         <div className="flex items-center gap-2">
           <SensorChip />
+          <NewMissionButton />
           <button type="button" onClick={fullscreen} className="rounded-lg px-2 py-1 text-slate-500 hover:bg-space-700 hover:text-slate-200" title="Full screen" aria-label="Full screen">
             ⛶
           </button>

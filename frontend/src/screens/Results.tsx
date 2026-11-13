@@ -4,6 +4,7 @@ import { api, ApiError } from "../api/client";
 import type { Comparison, Series, TestDetail } from "../api/types";
 import { ResultsChart } from "../components/ResultsChart";
 import { Badge, Button, Panel, Stat } from "../components/ui";
+import { fmtScaledHeight } from "../lib/copy";
 import { fmtG, fmtHeight, fmtMass, fmtNum, ORIGIN_LABEL, SOURCE_LABEL } from "../lib/format";
 import { describePrediction, measuredCategory, predictionVerdict } from "../lib/predict";
 import { useStore } from "../state/store";
@@ -197,14 +198,16 @@ export function Results() {
           ) : (
             <div className="pop-in py-4 font-display text-3xl font-black text-red-300">NO VALID IMPACT</div>
           )}
-          <div className="mt-2 text-sm text-slate-400">
-            {test.configuration_code && (
-              <>
-                Landing gear <b className="text-slate-200">{test.configuration_code} · {test.configuration_name}</b> ·{" "}
-              </>
-            )}
-            {fmtHeight(test.drop_height_m)} drop · {SOURCE_LABEL[test.source] ?? test.source}
+          <div className="mt-3 grid grid-cols-3 gap-2 text-left" aria-label="Test conditions">
+            <Stat label="Landing gear" value={test.configuration_code ?? "—"} sub={test.configuration_name ?? undefined} />
+            <Stat
+              label="Drop height"
+              value={fmtHeight(test.drop_height_m)}
+              sub={test.drop_height_m != null ? `${fmtScaledHeight(test.drop_height_m)} real lander` : undefined}
+            />
+            <Stat label="Mass" value={fmtMass(test.mass_kg)} />
           </div>
+          <div className="mt-1 text-xs text-slate-500">{SOURCE_LABEL[test.source] ?? test.source}</div>
           {young && peak !== null && settingsCategory(peak) && (
             <div className="mt-3 text-2xl font-bold text-white">That was a <span className="text-mars">{settingsCategory(peak)}</span> landing!</div>
           )}

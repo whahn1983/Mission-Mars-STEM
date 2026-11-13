@@ -137,6 +137,44 @@ def test_reset_broadcasts_to_clients(client):
         assert msg["type"] == "reset"
 
 
+def test_student_reset_needs_no_pin_and_never_interrupts_a_test(client):
+    cfg = client.get("/api/configurations").json()[0]
+    assert client.post("/api/capture/arm", json={"configuration_id": cfg["id"]}).status_code == 200
+    r = client.post("/api/mission/reset")
+    assert r.status_code == 409 and "in progress" in r.json()["detail"]
+    assert client.get("/api/capture").json()["state"] in {"baseline", "armed"}
+    client.post("/api/capture/cancel")
+    with client.websocket_connect("/ws") as ws:
+        assert ws.receive_json()["type"] == "hello"
+        r = client.post("/api/mission/reset")
+        assert r.status_code == 200 and r.json()["state"] == "idle"
+        for _ in range(50):
+            msg = ws.receive_json()
+            if msg["type"] == "reset":
+                break
+        assert msg["type"] == "reset"
+
+
+def test_student_chosen_drop_height_is_recorded(client):
+    st = client.get("/api/state").json()
+    assert "allow_student_height_change" not in st["settings"]
+    assert st["settings"]["drop_height_options_m"] == [0.1, 0.2, 0.3]
+    cfg = client.get("/api/configurations").json()[1]
+    r = client.post("/api/capture/arm", json={"configuration_id": cfg["id"], "drop_height_m": 0.3})
+    assert r.status_code == 200 and r.json()["mission"]["drop_height_m"] == 0.3
+    wait_for(client, {"armed"})
+    client.post("/api/capture/simulate-drop")
+    s = wait_for(client, {"complete", "error"})
+    t = client.get(f"/api/tests/{s['test_id']}").json()
+    assert t["drop_height_m"] == pytest.approx(0.3)
+    assert t["analysis"]["physics"]["impact_speed_m_s"] == pytest.approx((2 * 9.80665 * 0.3) ** 0.5, rel=1e-3)
+    # Without a choice the station default (20 cm) applies.
+    client.post("/api/capture/arm", json={"configuration_id": cfg["id"]})
+    assert client.get("/api/capture").json()["mission"]["drop_height_m"] == pytest.approx(0.2)
+    client.post("/api/capture/cancel")
+    assert client.post("/api/capture/arm", json={"configuration_id": cfg["id"], "drop_height_m": 5}).status_code == 422
+
+
 def test_websocket_streams_live_telemetry(client):
     with client.websocket_connect("/ws") as ws:
         ws.receive_json()

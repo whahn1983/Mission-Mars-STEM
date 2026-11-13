@@ -4,6 +4,7 @@ import { LiveChart, LiveMagnitude } from "../components/LiveChart";
 import { SensorChip } from "../components/Shell";
 import { Badge, Button, Panel } from "../components/ui";
 import { fmtG, fmtHeight, fmtMass } from "../lib/format";
+import { effectiveHeight } from "../lib/height";
 import { describePrediction } from "../lib/predict";
 import { useStore } from "../state/store";
 
@@ -38,8 +39,9 @@ export function LiveTest() {
   const sim = sensor?.mode === "simulation";
   const state = capture?.state ?? "idle";
   const active = ["baseline", "armed", "triggered", "analyzing"].includes(state);
-  const canStudentHeight = sim && settings?.allow_student_height_change;
-  const height = active && capture?.mission ? capture.mission.drop_height_m : (canStudentHeight && dropHeight) || settings?.drop_height_m || 0.2;
+  // The height chosen on the Design screen; while a test runs, the one it uses.
+  const chosenHeight = effectiveHeight(settings, dropHeight);
+  const height = active && capture?.mission ? capture.mission.drop_height_m : chosenHeight;
   const sensorReady = !!sensor?.connected && sensor.streaming_available !== false;
   // Record mode (EVB Lite): the sensor records a fixed window per test (a
   // countdown) and sends the recording when it ends; with a stop request in
@@ -90,7 +92,7 @@ export function LiveTest() {
         configuration_id: cfg.id,
         grade_band: gradeBand,
         prediction,
-        ...(canStudentHeight && dropHeight ? { drop_height_m: dropHeight } : {}),
+        drop_height_m: chosenHeight,
       });
     });
   const release = () => call(() => api.simulateDrop());
@@ -184,7 +186,7 @@ export function LiveTest() {
             <div className="text-slate-400">Mass</div>
             <div className="text-right font-mono">{fmtMass(cfg?.mass_kg)}</div>
             <div className="text-slate-400">Drop height</div>
-            <div className="text-right font-mono">{fmtHeight(height)}</div>
+            <div className="text-right font-mono text-lg font-bold text-telemetry">{fmtHeight(height)}</div>
             <div className="text-slate-400">Prediction</div>
             <div className="text-right font-mono">{describePrediction(prediction)}</div>
           </div>
@@ -228,6 +230,7 @@ export function LiveTest() {
           {state === "armed" && !sim && !stopping && !fixedWindow && (
             <div className="animate-pulse rounded-2xl border-2 border-mars bg-mars/15 p-5 text-center font-display text-2xl font-black tracking-widest text-mars">
               RELEASE THE LANDER!
+              <div className="mt-1 font-sans text-base font-semibold normal-case tracking-normal text-orange-200">from {fmtHeight(height)}</div>
             </div>
           )}
           {state === "armed" && canStop && !stopping && (
@@ -248,6 +251,7 @@ export function LiveTest() {
               ) : (
                 <div className="animate-pulse rounded-2xl border-2 border-mars bg-mars/15 p-5 text-center font-display text-2xl font-black tracking-widest text-mars">
                   RELEASE THE LANDER!
+                  <div className="mt-1 font-sans text-base font-semibold normal-case tracking-normal text-orange-200">from {fmtHeight(height)}</div>
                 </div>
               )}
               {remaining !== null && windowS ? (
@@ -319,9 +323,14 @@ export function LiveTest() {
           </p>
         </Panel>
 
-        <Button variant="ghost" onClick={() => go("predict")} disabled={active}>
-          ◀ Change prediction
-        </Button>
+        <div className="grid grid-cols-2 gap-2">
+          <Button variant="ghost" onClick={() => go("design")} disabled={active}>
+            ◀ Change gear or height
+          </Button>
+          <Button variant="ghost" onClick={() => go("predict")} disabled={active}>
+            ◀ Change prediction
+          </Button>
+        </div>
       </div>
     </div>
   );

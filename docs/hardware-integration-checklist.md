@@ -55,6 +55,6 @@ Print this page. Details for each step are in [`evb-lite-integration.md`](evb-li
 - [ ] Sensor rigidly mounted in the payload bay (no foam tape)
 - [ ] Each built lander weighed; masses entered (Operator → Landing gear)
 - [ ] Only the built presets enabled
-- [ ] Drop height chosen so valid results are below ±16 g (start at 10 cm); entered in Operator → Station
+- [ ] Drop heights students can choose give valid results below ±16 g (include 10 cm); listed in Operator → Station
 - [ ] Same landing surface for every drop
 - [ ] A release method that drops straight down without a push

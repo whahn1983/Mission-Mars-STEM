@@ -17,7 +17,9 @@ SENSOR_KEYS = ("sensor_mode", "evb_host", "evb_port", "evb_timeout_s")
 SYSTEM_KEYS = SENSOR_KEYS + ("evb_accel_range_g", "sim_sample_rate_hz", "log_level")
 # Settings from earlier versions, removed on load. record_max_s (60 s, "until
 # STOP TEST") became record_window_s (10 s fixed window).
-OBSOLETE_KEYS = ("record_max_s",)
+# allow_student_height_change: students now always choose the drop height on
+# the Design screen.
+OBSOLETE_KEYS = ("record_max_s", "allow_student_height_change")
 
 # Earlier default values. A stored value still exactly equal to one of them
 # was never edited by the operator, so it is replaced by today's default on

@@ -480,6 +480,13 @@ async def test_record_mode_with_a_stop_request_runs_until_stop(record_capture):
     assert not cap.manager._capture_wants_stream
 
 
+async def test_physical_test_uses_the_students_drop_height(record_capture):
+    cap = record_capture
+    await cap.arm(configuration_id=cap.cfg_id, grade_band=None, prediction=None, drop_height_m=0.1)
+    assert cap.snapshot()["mission"]["drop_height_m"] == pytest.approx(0.1)
+    await cap.cancel()
+
+
 async def test_stop_without_a_stop_request_explains_the_fixed_window(record_capture):
     cap = record_capture
     cap.manager.adapter.profile.record.stop = None
@@ -695,6 +702,17 @@ def test_old_max_test_length_setting_is_replaced(database, env):
     st = SettingsStore(database, env)
     st.load()
     assert "record_max_s" not in st.all() and st.get("record_window_s") == 10
+
+
+def test_old_student_height_switch_is_removed(database, env):
+    from app.models import SettingRow
+    from app.services.settings_store import SettingsStore
+
+    with database.session() as s:
+        s.add(SettingRow(key="allow_student_height_change", value_json=False))
+    st = SettingsStore(database, env)
+    st.load()
+    assert "allow_student_height_change" not in st.all()
 
 
 def test_untouched_old_defaults_are_upgraded_but_edits_are_kept(database, env):
